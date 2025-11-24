@@ -8,10 +8,15 @@
 #include "riscv.h"
 #include "spike_interface/spike_utils.h"
 
+
 typedef struct elf_info_t {
   spike_file_t *f;
   process *p;
 } elf_info;
+
+elf_symbol elf_symbols[MAX_ELF_SYMBOLS];
+int elf_symbol_count = 0;
+f_name_addr func_names[MAX_ELF_SYMBOLS];
 
 //
 // the implementation of allocater. allocates memory space for later segment loading
@@ -102,6 +107,97 @@ static size_t parse_args(arg_buf *arg_bug_msg) {
 }
 
 //
+// read section name string from shstrtab
+//
+void elf_read_sect_name(elf_ctx *ctx, char *dest, uint32 name_offset,
+                               elf_sect_header *shstr_sh) {
+  uint64 shstrtab_data_size = shstr_sh->sh_size;
+  uint64 shstrtab_data_offset = shstr_sh->sh_offset;
+  char shstrtab_data[MAX_SECTION_DATA_LEN];
+
+  // read the whole shstrtab section
+  elf_fpread(ctx, shstrtab_data, shstrtab_data_size, shstrtab_data_offset);
+
+  // copy the section name to dest
+  uint32 i = 0;
+  while (i + name_offset < shstrtab_data_size) {
+    dest[i] = shstrtab_data[name_offset + i];
+    if (shstrtab_data[name_offset + i] == '\0') break;
+    i++;
+  }
+  dest[i] = '\0';
+}
+
+int mystrncpy(char *dest, const char *src, size_t n) {
+  size_t i;
+  for (i = 0; i < n - 1 && src[i] != '\0'; i++) {
+    dest[i] = src[i];
+  }
+  dest[i] = '\0';
+  return i;
+}
+
+//
+// load elf_strlab to get function name from address
+//
+void elf_load_symbol(elf_ctx *ctx) {
+  elf_header ehdr = ctx->ehdr;
+  uint64 shoff = ehdr.shoff;
+  uint16 shentsize = ehdr.shentsize;
+  uint16 shnum = ehdr.shnum; 
+  uint16 shstrndx = ehdr.shstrndx;
+  elf_sect_header sh_addr;
+  elf_sect_header sh_strtab;
+  elf_sect_header sh_symtab;
+  elf_sect_header shstr_sh;
+  uint64 shstr_pos = shoff + (uint64)shstrndx * shentsize;
+  elf_fpread(ctx, &shstr_sh, sizeof(shstr_sh), shstr_pos);
+  char shstrtab_data[MAX_SYMBOL_NAME_LEN];
+  for (int i = 0; i < shnum; i++) {
+    uint64 sh_pos = shoff + (uint64)i * shentsize;
+    elf_fpread(ctx, &sh_addr, sizeof(sh_addr), sh_pos);
+    elf_read_sect_name(ctx, shstrtab_data, sh_addr.sh_name, &shstr_sh);
+    //sprint("Section %d name: %s\n", i, shstrtab_data);
+    if (strcmp(shstrtab_data, ".strtab") == 0) {
+      sh_strtab = sh_addr;
+    } else if (strcmp(shstrtab_data, ".symtab") == 0) {
+      sh_symtab = sh_addr;
+    }
+  }
+  uint64 symtab_size = sh_symtab.sh_size;
+  uint64 symtab_offset = sh_symtab.sh_offset;
+  uint64 symtab_entsize = sh_symtab.sh_entsize;
+  uint64 strtab_size = sh_strtab.sh_size;
+  uint64 strtab_offset = sh_strtab.sh_offset;
+  uint64 sym_count = symtab_size / symtab_entsize;
+  elf_symbol sym;
+  for(int i=0; i<sym_count; i++) {
+    uint64 sym_pos = symtab_offset + (uint64)i * symtab_entsize;
+    elf_fpread(ctx, &sym, sizeof(sym), sym_pos);
+    if ((sym.st_info & 0xf) != 2) continue; // only process function type symbol
+    if (sym.st_size == 0) continue;
+    char sym_name[MAX_SYMBOL_NAME_LEN];
+    uint32 name_offset = sym.st_name;
+    uint32 j = 0;
+    while (j + name_offset < strtab_size) {
+      elf_fpread(ctx, &sym_name[j], 1, strtab_offset + name_offset + j);
+      if (sym_name[j] == '\0') break;
+      j++;
+    }
+    sym_name[j] = '\0';
+    elf_symbols[elf_symbol_count] = sym;
+    mystrncpy(func_names[elf_symbol_count].name, sym_name, MAX_SYMBOL_NAME_LEN);
+    func_names[elf_symbol_count].addr = sym.st_value;
+    elf_symbol_count++;
+    if (elf_symbol_count >= MAX_ELF_SYMBOLS) break;
+  }
+  for(int i=0; i<elf_symbol_count; i++) {
+    sprint("Function %d: name=%s, addr=0x%lx\n", i,
+      func_names[i].name, func_names[i].addr);
+  }
+}
+
+//
 // load the elf of user application, by using the spike file interface.
 //
 void load_bincode_from_host_elf(process *p) {
@@ -130,6 +226,8 @@ void load_bincode_from_host_elf(process *p) {
   // load elf. elf_load() is defined above.
   if (elf_load(&elfloader) != EL_OK) panic("Fail on loading elf.\n");
 
+  elf_load_symbol(&elfloader);
+
   // entry (virtual, also physical in lab1_x) address
   p->trapframe->epc = elfloader.ehdr.entry;
 
@@ -137,4 +235,42 @@ void load_bincode_from_host_elf(process *p) {
   spike_file_close( info.f );
 
   sprint("Application program entry point (virtual address): 0x%lx\n", p->trapframe->epc);
+}
+
+// map function address to name
+int f_addr_to_name(uint64 addr) {
+  if (elf_symbol_count <= 0) return -1;
+  
+  int best = -1;
+  uint64 best_addr = 0;
+
+  for (int i = 0; i < elf_symbol_count; i++) {
+    uint64 a = func_names[i].addr;
+    uint64 size = elf_symbols[i].st_size;
+
+    if (a == 0) continue;
+    if (a > addr) continue;
+
+    /* 选择距离 addr 最近且<=addr 的符号 */
+    if (best == -1 || a > best_addr) {
+      if (size > 0) {
+        /* 如果符号有大小，优先确保 addr 在范围内 */
+        if (addr < a + size) {
+          best = i;
+          best_addr = a;
+        } else {
+          /* 仍可作为备选（如果没有更好的匹配） */
+          if (best == -1) {
+            best = i;
+            best_addr = a;
+          }
+        }
+      } else {
+        best = i;
+        best_addr = a;
+      }
+    }
+  }
+
+  return best;
 }

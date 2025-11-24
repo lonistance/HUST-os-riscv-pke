@@ -5,6 +5,9 @@
 #include "process.h"
 
 #define MAX_CMDLINE_ARGS 64
+#define MAX_ELF_SYMBOLS 256
+#define MAX_SYMBOL_NAME_LEN 32
+#define MAX_SECTION_DATA_LEN 4096
 
 // elf header structure
 typedef struct elf_header_t {
@@ -37,6 +40,30 @@ typedef struct elf_prog_header_t {
   uint64 align;  /* Segment alignment */
 } elf_prog_header;
 
+/* ELF64 Section header (section table entry) */
+typedef struct elf_sect_header_t {
+  uint32 sh_name;      /* section name (string tbl index) */
+  uint32 sh_type;      /* section type */
+  uint64 sh_flags;     /* section flags */
+  uint64 sh_addr;      /* virtual address in memory */
+  uint64 sh_offset;    /* offset in file */
+  uint64 sh_size;      /* size in bytes */
+  uint32 sh_link;      /* link to another section */
+  uint32 sh_info;      /* additional section information */
+  uint64 sh_addralign; /* section alignment */
+  uint64 sh_entsize;   /* entry size if section holds a table */
+} elf_sect_header;
+
+/* ELF64 Symbol table entry (Elf64_Sym) */
+typedef struct elf_symbol_t {
+  uint32 st_name;   /* symbol name (string tbl index) */
+  uint8  st_info;   /* type and binding attributes */
+  uint8  st_other;  /* no defined meaning, 0 */
+  uint16 st_shndx;  /* section index */
+  uint64 st_value;  /* symbol value (address) */
+  uint64 st_size;   /* symbol size */
+} elf_symbol;
+
 #define ELF_MAGIC 0x464C457FU  // "\x7FELF" in little endian
 #define ELF_PROG_LOAD 1
 
@@ -55,9 +82,20 @@ typedef struct elf_ctx_t {
   elf_header ehdr;
 } elf_ctx;
 
+typedef struct f_name_addr_t {
+  char name[MAX_SYMBOL_NAME_LEN];
+  uint64 addr;
+} f_name_addr;
+
+extern elf_symbol elf_symbols[MAX_ELF_SYMBOLS];
+extern int elf_symbol_count;
+extern f_name_addr func_names[MAX_ELF_SYMBOLS];
+
 elf_status elf_init(elf_ctx *ctx, void *info);
 elf_status elf_load(elf_ctx *ctx);
 
+void elf_load_symbol(elf_ctx *ctx);
 void load_bincode_from_host_elf(process *p);
+int f_addr_to_name(uint64 addr);
 
 #endif
