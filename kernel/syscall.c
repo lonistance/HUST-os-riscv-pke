@@ -34,7 +34,9 @@ ssize_t sys_user_print(const char* buf, size_t n) {
 ssize_t sys_user_exit(uint64 code) {
   sprint("User exit with code:%d.\n", code);
   // reclaim the current process, and reschedule. added @lab3_1
+  //sprint("exit: %d.\n", current->pid);
   free_process( current );
+  wake_up( current );
   schedule();
   return 0;
 }

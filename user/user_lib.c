@@ -81,5 +81,10 @@ void yield() {
 // lib call to wait
 //
 int wait(int pid) {
-  return do_user_call(SYS_user_wait, pid, 0, 0, 0, 0, 0, 0);
+  int temp;
+  temp = do_user_call(SYS_user_wait, pid, 0, 0, 0, 0, 0, 0);
+  if(temp >= -1) return temp;
+  else {
+    return 0;
+    }
 } 

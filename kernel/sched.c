@@ -7,6 +7,15 @@
 
 process* ready_queue_head = NULL;
 process* block_queue_head = NULL;
+void tem_show_ready_queue() {
+  process* p = ready_queue_head;
+  sprint( "ready queue: " );
+  while ( p != NULL ) {
+    sprint( "pid = %d,status = %d-> ", p->pid, p->status );
+    p = p->queue_next;
+  }
+  sprint( "NULL\n" );
+}
 //
 // insert a process, proc, into the END of ready queue.
 //
@@ -17,6 +26,8 @@ void insert_to_ready_queue( process* proc ) {
     proc->status = READY;
     proc->queue_next = NULL;
     ready_queue_head = proc;
+    sprint( "ready queue is empty.\n" );
+    tem_show_ready_queue();
     return;
   }
 
@@ -24,14 +35,14 @@ void insert_to_ready_queue( process* proc ) {
   process *p;
   // browse the ready queue to see if proc is already in-queue
   for( p=ready_queue_head; p->queue_next!=NULL; p=p->queue_next )
-    if( p == proc ) return;  //already in queue
-
+    if( p == proc ) {
+      return;  //already in queue
+    }
   // p points to the last element of the ready queue
   if( p==proc ) return;
   p->queue_next = proc;
   proc->status = READY;
   proc->queue_next = NULL;
-
   return;
 }
 
@@ -41,10 +52,11 @@ void insert_to_ready_queue( process* proc ) {
 void insert_to_block_queue( process* proc ) {
   //sprint( "going to insert process %d to block queue.\n", proc->pid );
   // if the queue is empty in the beginning
+  sprint( "process %d is blocked\n", proc->pid );
   if( block_queue_head == NULL ){
     proc->status = BLOCKED;
     proc->queue_next = NULL;
-    ready_queue_head = proc;
+    ready_queue_head = proc;//when copy it, I spell it as ready_queue_head,bug here!It should be block_queue_head
     return;
   }
 
@@ -91,6 +103,7 @@ void schedule() {
     }
   }
 
+  tem_show_ready_queue();
   current = ready_queue_head;
   assert( current->status == READY );
   ready_queue_head = ready_queue_head->queue_next;
@@ -100,31 +113,30 @@ void schedule() {
   switch_to( current );
 }
 
+// when a process is done, wake up the parent process from block queue, and put it into ready queue.
 void wake_up( process* proc ) {
-  sprint( "going to wake up process %d from block queue.\n", proc->pid );
-  // remove proc from block queue
-  process* p = block_queue_head;
-  process* prev = NULL;
-
-  if (p == NULL) {
-    panic("wake_up: block queue is empty\n");
+  process* wake = block_queue_head;
+  if ( wake == NULL ) {
+    sprint( "block queue is empty, nothing to wake up.\n" );
+    return;
+  } else if ( wake == proc->parent) {
+    block_queue_head = wake->queue_next;
+    wake->status = READY;
+    sprint( "going to wake up process %d from block queue.\n", proc->pid );
+    insert_to_ready_queue( wake );
     return;
   }
-  while( p != NULL ){
-    if( p == proc ){
-      // found the process to wake up
-      if( prev == NULL ){
-        // p is the head of block queue
-        block_queue_head = p->queue_next;
-      }else{
-        prev->queue_next = p->queue_next;
+  else {
+    while ( wake->queue_next != NULL ) {
+      if ( wake->queue_next == proc->parent ) {
+        process* tmp = wake->queue_next;
+        wake->queue_next = tmp->queue_next;
+        tmp->status = READY;
+        sprint( "going to wake up process %d from block queue.\n", proc->pid );
+        insert_to_ready_queue( tmp );
+        return;
       }
-      break;
+      wake = wake->queue_next;
     }
-    prev = p;
-    p = p->queue_next;
   }
-
-  // insert proc to ready queue
-  insert_to_ready_queue( proc );
 }
