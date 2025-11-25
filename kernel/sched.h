@@ -8,5 +8,9 @@
 
 void insert_to_ready_queue( process* proc );
 void schedule();
+void insert_to_block_queue( process* proc );
+void wake_up( process* proc );
+
+extern process* block_queue_head;
 
 #endif

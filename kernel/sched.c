@@ -6,7 +6,7 @@
 #include "spike_interface/spike_utils.h"
 
 process* ready_queue_head = NULL;
-
+process* block_queue_head = NULL;
 //
 // insert a process, proc, into the END of ready queue.
 //
@@ -30,6 +30,34 @@ void insert_to_ready_queue( process* proc ) {
   if( p==proc ) return;
   p->queue_next = proc;
   proc->status = READY;
+  proc->queue_next = NULL;
+
+  return;
+}
+
+//
+// insert a process, proc, into the END of block queue.
+//
+void insert_to_block_queue( process* proc ) {
+  //sprint( "going to insert process %d to block queue.\n", proc->pid );
+  // if the queue is empty in the beginning
+  if( block_queue_head == NULL ){
+    proc->status = BLOCKED;
+    proc->queue_next = NULL;
+    ready_queue_head = proc;
+    return;
+  }
+
+  // block queue is not empty
+  process *p;
+  // browse the ready queue to see if proc is already in-queue
+  for( p=block_queue_head; p->queue_next!=NULL; p=p->queue_next )
+    if( p == proc ) return;  //already in queue
+
+  // p points to the last element of the block queue
+  if( p==proc ) return;
+  p->queue_next = proc;
+  proc->status = BLOCKED;
   proc->queue_next = NULL;
 
   return;
@@ -70,4 +98,33 @@ void schedule() {
   current->status = RUNNING;
   sprint( "going to schedule process %d to run.\n", current->pid );
   switch_to( current );
+}
+
+void wake_up( process* proc ) {
+  sprint( "going to wake up process %d from block queue.\n", proc->pid );
+  // remove proc from block queue
+  process* p = block_queue_head;
+  process* prev = NULL;
+
+  if (p == NULL) {
+    panic("wake_up: block queue is empty\n");
+    return;
+  }
+  while( p != NULL ){
+    if( p == proc ){
+      // found the process to wake up
+      if( prev == NULL ){
+        // p is the head of block queue
+        block_queue_head = p->queue_next;
+      }else{
+        prev->queue_next = p->queue_next;
+      }
+      break;
+    }
+    prev = p;
+    p = p->queue_next;
+  }
+
+  // insert proc to ready queue
+  insert_to_ready_queue( proc );
 }

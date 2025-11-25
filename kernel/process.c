@@ -232,19 +232,34 @@ int do_fork( process* parent)
         // segment of parent process.
         // DO NOT COPY THE PHYSICAL PAGES, JUST MAP THEM.
         //panic( "You need to implement the code segment mapping of child in lab3_1.\n" );
-        map_pages( child->pagetable,
-                   parent->mapped_info[i].va,
-                   parent->mapped_info[i].npages * PGSIZE,
-                   lookup_pa( parent->pagetable, parent->mapped_info[i].va ),
-                   prot_to_type( PROT_READ | PROT_EXEC, 1 ) );
-        sprint("do_fork map code segment at pa:%lx of parent to child at va:%lx.\n",
-          lookup_pa( parent->pagetable, parent->mapped_info[i].va ),
-          parent->mapped_info[i].va );
+        for( int j=0; j<parent->mapped_info[i].npages; j++ ){
+            uint64 addr = lookup_pa(parent->pagetable, parent->mapped_info[i].va+j*PGSIZE);
+            map_pages(child->pagetable, parent->mapped_info[i].va+j*PGSIZE, PGSIZE,
+                    addr, prot_to_type(PROT_READ | PROT_EXEC, 1));
+            sprint( "do_fork map code segment at pa:%lx of parent to child at va:%lx.\n",
+                    addr, parent->mapped_info[i].va+j*PGSIZE );
+        }
         // after mapping, register the vm region (do not delete codes below!)
         child->mapped_info[child->total_mapped_region].va = parent->mapped_info[i].va;
         child->mapped_info[child->total_mapped_region].npages =
           parent->mapped_info[i].npages;
         child->mapped_info[child->total_mapped_region].seg_type = CODE_SEGMENT;
+        child->total_mapped_region++;
+        break;
+      case DATA_SEGMENT:
+        for (int j = 0; j < parent->mapped_info[i].npages; j++) {
+          void* child_pa = alloc_page();
+          memcpy(child_pa,
+                 (void*)lookup_pa(parent->pagetable, parent->mapped_info[i].va + j * PGSIZE),
+                 PGSIZE);
+          user_vm_map((pagetable_t)child->pagetable, parent->mapped_info[i].va + j * PGSIZE,
+                      PGSIZE, (uint64)child_pa,
+                      prot_to_type(PROT_WRITE | PROT_READ, 1));
+        }
+        child->mapped_info[child->total_mapped_region].va = parent->mapped_info[i].va;
+        child->mapped_info[child->total_mapped_region].npages =
+          parent->mapped_info[i].npages;
+        child->mapped_info[child->total_mapped_region].seg_type = DATA_SEGMENT;
         child->total_mapped_region++;
         break;
     }
@@ -256,4 +271,44 @@ int do_fork( process* parent)
   insert_to_ready_queue( child );
 
   return child->pid;
+}
+
+int do_wait( uint64 pid ) {
+  if ( pid == -1){
+    bool found = 0;
+    for ( int i = 0; i < NPROC; i++ ) {
+      if ( procs[i].parent == current ) {
+        found = 1;
+        if ( procs[i].status == ZOMBIE ) {
+          procs[i].status == FREE;
+          return procs[i].pid;
+        }
+      }
+    }
+    if ( found == 0 ) {
+      return -1;
+    } else {
+      // block current process
+      insert_to_block_queue( current );
+      schedule();
+      return -1;
+    }
+  } else if( pid < NPROC ) {
+    process* child = &procs[pid];
+    if ( child->parent != current ) {
+      return -1;
+    }
+    if ( child->status != ZOMBIE ) {
+      // block current process
+      insert_to_block_queue( current );
+      schedule();
+      return -1;
+    } else {
+      // reclaim child process
+      free_process( child );
+      return pid;
+    }
+  } else {
+    return -1;
+  }
 }
