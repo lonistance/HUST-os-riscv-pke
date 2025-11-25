@@ -59,9 +59,31 @@ void handle_user_page_fault(uint64 mcause, uint64 sepc, uint64 stval) {
       // hint: first allocate a new physical page, and then, maps the new page to the
       // virtual address that causes the page fault.
       //panic( "You need to implement the operations that actually handle the page fault in lab2_3.\n" );
-      void* pa = alloc_page();
-      user_vm_map(current->pagetable, ROUNDDOWN(stval, PGSIZE), PGSIZE, (uint64)pa,
-             prot_to_type(PROT_WRITE | PROT_READ, 1));
+      // Handle stack growth: allow mapping only when the faulting address is
+      // within a bounded region below the user stack pointer.
+      {
+        const int STACK_GROW_PAGES = 32; /* 可调整的最大增长页数 */
+        uint64 va_page = ROUNDDOWN(stval, PGSIZE);
+        uint64 user_sp = current->trapframe->regs.sp;
+
+        /* 计算允许的最小地址（页对齐） */
+        uint64 min_allowed;
+        if (user_sp > (uint64)STACK_GROW_PAGES * PGSIZE)
+          min_allowed = ROUNDDOWN(user_sp - (uint64)STACK_GROW_PAGES * PGSIZE, PGSIZE);
+        else
+          min_allowed = 0;
+
+        /* 基本检查：必须在用户地址空间内且在允许的增长区间内 */
+        if (va_page < min_allowed || va_page >= MAXVA) {
+          panic("this address is not available!");
+          //panic("handle_page_fault: stack growth rejected (stval=0x%lx, sp=0x%lx)\n", stval, user_sp);
+        }
+
+        /* 分配并映射新页 */
+        void *pa = alloc_page();
+        user_vm_map(current->pagetable, va_page, PGSIZE, (uint64)pa,
+                    prot_to_type(PROT_WRITE | PROT_READ, 1));
+      }
       break;
     default:
       sprint("unknown page fault.\n");
