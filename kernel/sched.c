@@ -26,8 +26,8 @@ void insert_to_ready_queue( process* proc ) {
     proc->status = READY;
     proc->queue_next = NULL;
     ready_queue_head = proc;
-    sprint( "ready queue is empty.\n" );
-    tem_show_ready_queue();
+    //sprint( "ready queue is empty.\n" );
+    //tem_show_ready_queue();
     return;
   }
 
@@ -52,11 +52,11 @@ void insert_to_ready_queue( process* proc ) {
 void insert_to_block_queue( process* proc ) {
   //sprint( "going to insert process %d to block queue.\n", proc->pid );
   // if the queue is empty in the beginning
-  sprint( "process %d is blocked\n", proc->pid );
+  //sprint( "process %d is blocked\n", proc->pid );
   if( block_queue_head == NULL ){
     proc->status = BLOCKED;
     proc->queue_next = NULL;
-    ready_queue_head = proc;//when copy it, I spell it as ready_queue_head,bug here!It should be block_queue_head
+    block_queue_head = proc;//when copy it, I spell it as ready_queue_head,bug here!It should be block_queue_head
     return;
   }
 
@@ -103,7 +103,7 @@ void schedule() {
     }
   }
 
-  tem_show_ready_queue();
+  //tem_show_ready_queue();
   current = ready_queue_head;
   assert( current->status == READY );
   ready_queue_head = ready_queue_head->queue_next;
@@ -117,12 +117,12 @@ void schedule() {
 void wake_up( process* proc ) {
   process* wake = block_queue_head;
   if ( wake == NULL ) {
-    sprint( "block queue is empty, nothing to wake up.\n" );
+    //sprint( "block queue is empty, nothing to wake up.\n" );
     return;
   } else if ( wake == proc->parent) {
     block_queue_head = wake->queue_next;
     wake->status = READY;
-    sprint( "going to wake up process %d from block queue.\n", proc->pid );
+    //sprint( "going to wake up process %d from block queue.\n", proc->pid );
     insert_to_ready_queue( wake );
     return;
   }
@@ -132,7 +132,7 @@ void wake_up( process* proc ) {
         process* tmp = wake->queue_next;
         wake->queue_next = tmp->queue_next;
         tmp->status = READY;
-        sprint( "going to wake up process %d from block queue.\n", proc->pid );
+        //sprint( "going to wake up process %d from block queue.\n", proc->pid );
         insert_to_ready_queue( tmp );
         return;
       }

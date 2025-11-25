@@ -264,12 +264,12 @@ int do_fork( process* parent)
         break;
     }
   }
-  
+
   child->status = READY;
   child->trapframe->regs.a0 = 0;
   child->parent = parent;
   insert_to_ready_queue( child );
-  sprint( "should insert a child process %d to ready.\n", child->pid );
+  //sprint( "should insert a child process %d to ready.\n", child->pid );
   return child->pid;
 }
 
@@ -279,7 +279,7 @@ int do_wait( uint64 pid ) {
     for ( int i = 0; i < NPROC; i++ ) {
       if ( procs[i].parent == current ) {
         found = 1;
-        sprint( "found child process %d in wait.Status = %d\n", procs[i].pid , procs[i].status );
+        //sprint( "found child process %d in wait.Status = %d\n", procs[i].pid , procs[i].status );
         if ( procs[i].status == ZOMBIE ) {
           procs[i].status == FREE;
           return procs[i].pid;
