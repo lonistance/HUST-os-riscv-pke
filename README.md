@@ -1,8 +1,9 @@
-# -os-riscv-pke
+# HUST-os-riscv-pke
 保存我在os实验所做的工作，预计会实现lab1-4的3个基础实验和第一个挑战实验，实验原项目参见https://gitee.com/hustos
 指导在pke-doc目录下，源代码在riscv-pke下。所有关卡以通过头歌关卡为最低目标，因此存在很多可以改进的地方
 3个基础实验的答案可以查看实验指导书（如果有），但那本书其实没什么用
 头歌平台上没法继承前面的工作，开始每一关实验前，必须从lab1-1开始手动重做一遍工作（一般只要重做lab1-1等少数几个实验的工作，但为了以防万一，建议全部重做完）
+main分支只能看到readme，需要切换分支
 每个关卡改动如下：
 lab1-1: strap.c的handle_syscall函数
 lab1-2: machine/mtrap.c的handle_mtrap函数
@@ -14,6 +15,8 @@ lab2-3: strap.c的handle_user_page_fault函数
 （说明：头歌平台出现case语句直接接变量声明 case CONST_NUM:
                         declaration variable;
       会出现报错，解决方法是在声明前加一个分号; 这就是本地环境能过，头歌报错的原因）
+
+lab3-1: pocess.c的do_fork函数
 
 lab1 challenge1: 这关要修改以下文件：
 user_lib.h,user_lib.c：添加print_backtrace函数的定义与实现
