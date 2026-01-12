@@ -15,6 +15,7 @@
 #include "util/functions.h"
 #include "util/string.h"
 
+
 //
 // initialize file system
 //
@@ -80,6 +81,12 @@ struct file *get_opened_file(int fd) {
 // return: -1 on failure; non-zero file-descriptor on success.
 //
 int do_open(char *pathname, int flags) {
+  if (pathname[0] == '.') {
+    char resolved_path[MAX_PATH_LEN];
+    resolve_path(current->pfiles->cwd, pathname, resolved_path);
+    memcpy(pathname, resolved_path, MAX_PATH_LEN);
+  }
+  sprint("do_open: path: %s\n", pathname);
   struct file *opened_file = NULL;
   if ((opened_file = vfs_open(pathname, flags)) == NULL) return -1;
 
@@ -220,4 +227,40 @@ int do_link(char *oldpath, char *newpath) {
 //
 int do_unlink(char *path) {
   return vfs_unlink(path);
+}
+
+void resolve_path(struct dentry *cwd ,char *pathpa, char *resolved_path) {
+  if (pathpa[2] == '.') {
+    // go to parent directory
+    if (cwd->parent != NULL) {
+      memcpy(resolved_path, cwd->parent->name, MAX_PATH_LEN);
+    }
+  } else {
+    // go to current directory
+    memcpy(resolved_path, cwd->name, MAX_PATH_LEN);
+    strcat(resolved_path, pathpa + 2);
+  }
+}
+
+
+int do_rcwd(char * pathpa){
+  sprint("pa path: %s,cwd path: %s,root path: %s\n", pathpa, current->pfiles->cwd->name, vfs_root_dentry->name);
+  memcpy(pathpa, current->pfiles->cwd->name, MAX_PATH_LEN);
+  return 0;
+}
+
+int do_ccwd(char * pathpa){
+  char resolved_path[MAX_PATH_LEN];
+  sprint("ccwd pa path: %s,cwd path: %s,root path: %s\n", pathpa, current->pfiles->cwd->name, vfs_root_dentry->name);
+  if (pathpa[0] != '.') {
+    // absolute path
+    memcpy(current->pfiles->cwd->name, pathpa, MAX_PATH_LEN);
+    sprint("ccwd pa path: %s,cwd path: %s,root path: %s\n", pathpa, current->pfiles->cwd->name, vfs_root_dentry->name);
+  } else {
+    // relative path
+    resolve_path(current->pfiles->cwd, pathpa, resolved_path);
+    memcpy(current->pfiles->cwd->name, resolved_path, MAX_PATH_LEN);
+    sprint("ccwd resolved path: %s,cwd path: %s,root path: %s\n", resolved_path, current->pfiles->cwd->name, vfs_root_dentry->name);
+  }
+  return 0;
 }
