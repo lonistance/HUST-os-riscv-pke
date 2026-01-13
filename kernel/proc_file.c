@@ -81,6 +81,7 @@ struct file *get_opened_file(int fd) {
 // return: -1 on failure; non-zero file-descriptor on success.
 //
 int do_open(char *pathname, int flags) {
+  sprint("do_open: path: %s\n", pathname);
   if (pathname[0] == '.') {
     char resolved_path[MAX_PATH_LEN];
     resolve_path(current->pfiles->cwd, pathname, resolved_path);

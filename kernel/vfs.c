@@ -3,7 +3,7 @@
  */
 
 #include "vfs.h"
-
+#include "process.h"
 #include "pmm.h"
 #include "spike_interface/spike_utils.h"
 #include "util/string.h"
@@ -502,6 +502,66 @@ int vfs_closedir(struct file *file) {
   return 0;
 }
 
+struct dentry *vfs_resolve_path(const char *path, struct dentry *start_dentry, struct dentry **parent_result,  char *miss_component) {
+  if (!path || path[0] == '\0') {
+    return NULL;
+  }
+  // sprint("Path='%s', start='%s'\n", path, start_dentry->name);
+  char path_copy[MAX_PATH_LEN];
+  strcpy(path_copy, path);
+  struct dentry *cur_dentry = (path[0] == '/') ? vfs_root_dentry : start_dentry;
+  struct dentry *prev_dentry = NULL;
+  char *path_component = strtok(path_copy, "/");
+  while (path_component != NULL) {
+    // sprint("Processing component: '%s'\n", path_component);
+    if (strcmp(path_component, ".") == 0) {
+      // sprint("Skipping '.'\n");
+      path_component = strtok(NULL, "/");
+      continue;
+    } else if (strcmp(path_component, "..") == 0) {
+      // sprint("Moving to parent\n");
+      if (cur_dentry->parent != NULL) {
+        prev_dentry = cur_dentry;
+        cur_dentry = cur_dentry->parent;
+      }
+      path_component = strtok(NULL, "/");
+      continue;
+    }
+    if (parent_result) *parent_result = cur_dentry;
+    struct dentry *next_dentry = hash_get_dentry(cur_dentry, path_component);
+    if (!next_dentry) {
+      struct dentry *temp_dentry = alloc_vfs_dentry(path_component, NULL, cur_dentry);
+      struct vinode *found_inode = viop_lookup(cur_dentry->dentry_inode, temp_dentry);
+      if (!found_inode) {
+        // sprint("Component not found on disk: %s\n", path_component);
+        free_page(temp_dentry);
+        if (miss_component) strcpy(miss_component, path_component);
+        return NULL;
+      }
+      struct vinode *cached_inode = hash_get_vinode(found_inode->sb, found_inode->inum);
+      if (cached_inode) {
+        temp_dentry->dentry_inode = cached_inode;
+        cached_inode->ref++;
+        free_page(found_inode);
+        // sprint("Using cached inode\n");
+      } else {
+        temp_dentry->dentry_inode = found_inode;
+        found_inode->ref++;
+        hash_put_vinode(found_inode);
+        // sprint("Added new inode to cache\n");
+      }
+      hash_put_dentry(temp_dentry);
+      next_dentry = temp_dentry;
+    }
+    prev_dentry = cur_dentry;
+    cur_dentry = next_dentry;
+    path_component = strtok(NULL, "/");
+  }
+  if (miss_component) miss_component[0] = '\0';
+  return cur_dentry;
+}
+
+
 //
 // lookup the "path" and return its dentry (or NULL if not found).
 // the lookup starts from parent, and stop till the full "path" is parsed.
@@ -509,54 +569,8 @@ int vfs_closedir(struct file *file) {
 //
 struct dentry *lookup_final_dentry(const char *path, struct dentry **parent,
                                    char *miss_name) {
-  char path_copy[MAX_PATH_LEN];
-  strcpy(path_copy, path);
-
-  // split the path, and retrieves a token at a time.
-  // note: strtok() uses a static (local) variable to store the input path
-  // string at the first time it is called. thus it can out a token each time.
-  // for example, when input path is: /RAMDISK0/test_dir/ramfile2
-  // strtok() outputs three tokens: 1)RAMDISK0, 2)test_dir and 3)ramfile2
-  // at its three continuous invocations.
-  char *token = strtok(path_copy, "/");
-  struct dentry *this = *parent;
-
-  while (token != NULL) {
-    *parent = this;
-    this = hash_get_dentry((*parent), token);  // try hash first
-    if (this == NULL) {
-      // if not found in hash, try to find it in the directory
-      this = alloc_vfs_dentry(token, NULL, *parent);
-      // lookup subfolder/file in its parent directory. note:
-      // hostfs and rfs will take different procedures for lookup.
-      struct vinode *found_vinode = viop_lookup((*parent)->dentry_inode, this);
-      if (found_vinode == NULL) {
-        // not found in both hash table and directory file on disk.
-        free_page(this);
-        strcpy(miss_name, token);
-        return NULL;
-      }
-
-      struct vinode *same_inode = hash_get_vinode(found_vinode->sb, found_vinode->inum);
-      if (same_inode != NULL) {
-        // the vinode is already in the hash table (i.e. we are opening another hard link)
-        this->dentry_inode = same_inode;
-        same_inode->ref++;
-        free_page(found_vinode);
-      } else {
-        // the vinode is not in the hash table
-        this->dentry_inode = found_vinode;
-        found_vinode->ref++;
-        hash_put_vinode(found_vinode);
-      }
-
-      hash_put_dentry(this);
-    }
-
-    // get next token
-    token = strtok(NULL, "/");
-  }
-  return this;
+  struct dentry *start_point = (path[0] == '/') ? vfs_root_dentry : current->pfiles->cwd;
+  return vfs_resolve_path(path, start_point, parent, miss_name);
 }
 
 //

@@ -14,6 +14,7 @@
 #include "vmm.h"
 #include "sched.h"
 #include "proc_file.h"
+#include "vfs.h"
 
 #include "spike_interface/spike_utils.h"
 
@@ -218,17 +219,51 @@ ssize_t sys_user_unlink(char * vfn){
 //
 // lib call to read current working directory
 //
-ssize_t sys_user_rcwd(char * pathva){
-  char * pathpa = (char*)user_va_to_pa((pagetable_t)(current->pagetable), pathva);
-  return do_rcwd(pathpa);
+ssize_t sys_user_rcwd(char *user_pathbuf) {
+  char *pathbuf_pa = (char*)user_va_to_pa((pagetable_t)current->pagetable, user_pathbuf);
+  struct dentry *working_dir = current->pfiles->cwd;
+  if (working_dir == NULL) {
+    strcpy(pathbuf_pa, "/");
+    return 0;
+  }
+  char *path_stack[64];
+  int depth = 0;
+  struct dentry *dentry_walker = working_dir;
+  while (dentry_walker != NULL && dentry_walker != vfs_root_dentry) {
+    path_stack[depth++] = dentry_walker->name;
+    dentry_walker = dentry_walker->parent;
+    // sprint("Moved up to parent, depth=%d\n", depth);
+  }
+  strcpy(pathbuf_pa, "/");
+  for (int i = depth - 1; i >= 0; i--) {
+    strcat(pathbuf_pa, path_stack[i]);
+    if (i > 0) strcat(pathbuf_pa, "/");
+  }
+  // sprint("Final path: %s\n", pathbuf_pa);
+  return 0;
 }
 
 //
 // lib call to change current working directory
 //
-ssize_t sys_user_ccwd(char * pathva){
-  char * pathpa = (char*)user_va_to_pa((pagetable_t)(current->pagetable), pathva);
-  return do_ccwd(pathpa);
+ssize_t sys_user_ccwd(char *user_path) {
+  char *path_pa = (char*)user_va_to_pa((pagetable_t)current->pagetable, user_path);
+  // sprint("p_path: %s\n", path_pa);
+  struct dentry *search_start = (path_pa[0] == '/') ? vfs_root_dentry : current->pfiles->cwd;
+  struct dentry *parent_dentry;
+  char missing_name[MAX_PATH_LEN];
+  struct dentry *target_dentry = vfs_resolve_path(path_pa, search_start, &parent_dentry, missing_name);
+  if (!target_dentry) {
+    // sprint("Path resolution failed at: %s\n", missing_name);
+    return -1;
+  }
+  if (target_dentry->dentry_inode->type != DIR_I) {
+    // sprint("type=%d\n", target_dentry->dentry_inode->type);
+    return -1;
+  }
+  // sprint(" ccwd: %s\n", target_dentry->name);
+  current->pfiles->cwd = target_dentry;
+  return 0;
 }
 
 //
