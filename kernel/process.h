@@ -18,6 +18,14 @@ typedef struct trapframe_t {
   /* offset:272 */ uint64 kernel_satp;
 }trapframe;
 
+// Memory Control Block for heap management
+typedef struct mcb_t {
+  uint64 addr;
+  uint64 size;
+  int used;
+  struct mcb_t *next;
+} mcb;
+
 // the extremely simple definition of process, used for begining labs of PKE
 typedef struct process_t {
   // pointing to the stack used in trap handling.
@@ -26,10 +34,17 @@ typedef struct process_t {
   pagetable_t pagetable;
   // trapframe storing the context of a (User mode) process.
   trapframe* trapframe;
+  // heap management
+  uint64 heap_top;
+  mcb *mcb_list;
 }process;
 
 // switch to run user app
 void switch_to(process*);
+
+// heap management functions
+uint64 heap_alloc(process *proc, uint64 size);
+void heap_free(process *proc, uint64 addr);
 
 // current running process
 extern process* current;
