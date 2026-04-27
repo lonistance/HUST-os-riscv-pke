@@ -24,6 +24,12 @@ static void handle_syscall(trapframe *tf) {
   long ret = do_syscall(regs->a7, regs->a0, regs->a1, regs->a2, regs->a3, regs->a4, regs->a5, regs->a6);
   // return value is stored in a0
   regs->a0 = ret;
+  // TODO (lab1_1): remove the panic call below, and call do_syscall (defined in
+  // kernel/syscall.c) to conduct real operations of the kernel side for a syscall.
+  // IMPORTANT: return value should be returned to user app, or else, you will encounter
+  // problems in later experiments!
+  //panic( "call do_syscall to accomplish the syscall and lab1_1 here.\n" );
+  tf->regs.a0 = do_syscall(tf->regs.a0,tf->regs.a1,tf->regs.a2,tf->regs.a3,tf->regs.a4,tf->regs.a5,tf->regs.a6,tf->regs.a7);
 }
 
 //
@@ -37,6 +43,12 @@ void handle_mtimer_trap() {
   // increase g_ticks to record this "tick"
   g_ticks++;
   // clear the SIP_SSIP bit in sip register
+  write_csr(sip, read_csr(sip) & ~SIP_SSIP);
+  // TODO (lab1_3): increase g_ticks to record this "tick", and then clear the "SIP"
+  // field in sip register.
+  // hint: use write_csr to disable the SIP_SSIP bit in sip.
+  //panic( "lab1_3: increase g_ticks by one, and clear SIP field in sip register.\n" );
+  g_ticks++;
   write_csr(sip, read_csr(sip) & ~SIP_SSIP);
 }
 
