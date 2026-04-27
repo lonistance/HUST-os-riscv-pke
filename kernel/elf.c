@@ -13,6 +13,7 @@ typedef struct elf_info_t {
   process *p;
 } elf_info;
 
+char debug_line_buff[MAX_SECTION_DATA_LEN * 2]; // double the buffer size to be safe
 //
 // the implementation of allocater. allocates memory space for later segment loading
 //
@@ -190,8 +191,8 @@ void make_addr_line(elf_ctx *ctx, char *debug_line, uint64 length) {
         }
 endop:;
     }
-    // for (int i = 0; i < p->line_ind; i++)
-    //     sprint("%p %d %d\n", p->line[i].addr, p->line[i].line, p->line[i].file);
+    //for (int i = 0; i < p->line_ind; i++)
+    //    sprint("%p %d %d\n", p->line[i].addr, p->line[i].line, p->line[i].file);
 }
 
 //
@@ -249,6 +250,53 @@ static size_t parse_args(arg_buf *arg_bug_msg) {
 }
 
 //
+// read section name string from shstrtab
+//
+void elf_read_sect_name(elf_ctx *ctx, char *dest, uint32 name_offset,
+                               elf_sect_header *shstr_sh) {
+  uint64 shstrtab_data_size = shstr_sh->size;
+  uint64 shstrtab_data_offset = shstr_sh->offset;
+  char shstrtab_data[MAX_SECTION_DATA_LEN];
+  // read the whole shstrtab section
+  elf_fpread(ctx, shstrtab_data, shstrtab_data_size, shstrtab_data_offset);
+  // copy the section name to dest
+  uint32 i = 0;
+  while (i + name_offset < shstrtab_data_size) {
+    dest[i] = shstrtab_data[name_offset + i];
+    if (shstrtab_data[name_offset + i] == '\0') break;
+    i++;
+  }
+  dest[i] = '\0';
+}
+
+//
+//load .debug_line section and make the address-line number-file name table for later debug use
+//
+void elf_load_debug_info(elf_ctx *ctx) {
+  elf_header *ehdr = &ctx->ehdr;
+  uint64 shoff = ehdr->shoff;
+  uint16 shentsize = ehdr->shentsize;
+  uint16 shnum = ehdr->shnum; 
+  uint16 shstrndx = ehdr->shstrndx;
+  elf_sect_header esh_debug_line;   //debug line section
+  elf_sect_header shstr_esh;        // section header string table section
+  uint64 shstr_pos = shoff + (uint64)shstrndx * shentsize;
+  elf_fpread(ctx, &shstr_esh, sizeof(shstr_esh), shstr_pos);
+  char shstrtab_data[MAX_ELFSH_NAME_LEN];
+  uint64 sh_pos;
+  for (int i = 0; i < shnum; i++) {
+    sh_pos = shoff + (uint64)i * shentsize;
+    elf_fpread(ctx, &esh_debug_line, sizeof(esh_debug_line), sh_pos);
+    elf_read_sect_name(ctx, shstrtab_data, esh_debug_line.name, &shstr_esh);
+    sprint("Section %d name: %s\n", i, shstrtab_data);
+    if (strcmp(shstrtab_data, ".debug_line") == 0) 
+      break;
+  }
+  elf_fpread(ctx, debug_line_buff, esh_debug_line.size, esh_debug_line.offset);
+  make_addr_line(ctx, debug_line_buff, esh_debug_line.size);
+}
+
+//
 // load the elf of user application, by using the spike file interface.
 //
 void load_bincode_from_host_elf(process *p) {
@@ -276,6 +324,9 @@ void load_bincode_from_host_elf(process *p) {
 
   // load elf. elf_load() is defined above.
   if (elf_load(&elfloader) != EL_OK) panic("Fail on loading elf.\n");
+
+  // entry to laod .debug_line section and make the address-line number-file name table for later debug use
+  elf_load_debug_info(&elfloader);
 
   // entry (virtual, also physical in lab1_x) address
   p->trapframe->epc = elfloader.ehdr.entry;

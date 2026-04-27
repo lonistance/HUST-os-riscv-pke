@@ -28,6 +28,7 @@ static void handle_timer() {
 // handle_mtrap calls a handling function according to the type of a machine mode interrupt (trap).
 //
 void handle_mtrap() {
+  show_debug(current);
   uint64 mcause = read_csr(mcause);
   switch (mcause) {
     case CAUSE_MTIMER:

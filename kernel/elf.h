@@ -5,6 +5,8 @@
 #include "process.h"
 
 #define MAX_CMDLINE_ARGS 64
+#define MAX_ELFSH_NAME_LEN 32
+#define MAX_SECTION_DATA_LEN 4096
 
 // elf header structure
 typedef struct elf_header_t {
@@ -86,5 +88,7 @@ elf_status elf_init(elf_ctx *ctx, void *info);
 elf_status elf_load(elf_ctx *ctx);
 
 void load_bincode_from_host_elf(process *p);
+
+void elf_load_debug_info(elf_ctx *ctx);
 
 #endif

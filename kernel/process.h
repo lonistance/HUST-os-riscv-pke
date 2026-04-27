@@ -40,4 +40,6 @@ void switch_to(process*);
 
 extern process* current;
 
+void show_debug(process* current);
+
 #endif

@@ -54,3 +54,13 @@ void switch_to(process* proc) {
   // return_to_user() is defined in kernel/strap_vector.S. switch to user mode with sret.
   return_to_user(proc->trapframe);
 }
+
+void show_debug(process* current){
+  uint64 addr = current->trapframe->regs.t0;
+  //for (int i = 0; i < MAX_SECTION_DATA_LEN; i++){
+  //
+  //}
+  sprint("Debug info: addr %p, file %d\n", current->line[2].addr, current->line[2].file);
+  sprint("All regs\n");
+  sprint("t6 %p,a0 %p\n",current->trapframe->regs.t6,*((uint64*)(current->trapframe->regs.t6+72)));
+}
