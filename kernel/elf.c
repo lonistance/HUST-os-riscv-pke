@@ -331,8 +331,77 @@ void load_bincode_from_host_elf(process *p) {
   // entry (virtual, also physical in lab1_x) address
   p->trapframe->epc = elfloader.ehdr.entry;
 
+  // added @lab1_challenge2: load .debug_line section for source line information
+  if (elfloader.ehdr.shoff != 0 && elfloader.ehdr.shstrndx != 0) {
+    elf_sect_header shstrhdr;
+    uint64 shstr_offset = elfloader.ehdr.shoff + elfloader.ehdr.shstrndx * sizeof(shstrhdr);
+    if (elf_fpread(&elfloader, &shstrhdr, sizeof(shstrhdr), shstr_offset) == sizeof(shstrhdr)) {
+      char *tmp_buf = (char *)0x81400000;
+      if (shstrhdr.size > 0 && shstrhdr.size <= 0x10000) {
+        elf_fpread(&elfloader, tmp_buf, shstrhdr.size, shstrhdr.offset);
+
+        for (int i = 0; i < elfloader.ehdr.shnum; i++) {
+          elf_sect_header sh;
+          uint64 sh_offset = elfloader.ehdr.shoff + i * sizeof(sh);
+          if (elf_fpread(&elfloader, &sh, sizeof(sh), sh_offset) == sizeof(sh)) {
+            if (strcmp(tmp_buf + sh.name, ".debug_line") == 0) {
+              elf_fpread(&elfloader, tmp_buf, sh.size, sh.offset);
+              make_addr_line(&elfloader, tmp_buf, sh.size);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
   // close the host spike file
   spike_file_close( info.f );
 
   sprint("Application program entry point (virtual address): 0x%lx\n", p->trapframe->epc);
+}
+
+//
+// added @lab1_challenge2: print the source code line text
+//
+void print_source_line(char *dir, char *file, int line) {
+  char path[256];
+  int i = 0;
+  while (*dir && i < 255) path[i++] = *dir++;
+  if (i < 255) path[i++] = '/';
+  while (*file && i < 255) path[i++] = *file++;
+  path[i] = '\0';
+
+  spike_file_t *f = spike_file_open(path, O_RDONLY, 0);
+  if (IS_ERR_VALUE(f)) return;
+
+  char *buf = (char *)0x81500000;
+  ssize_t total = 0;
+  ssize_t n;
+  while ((n = spike_file_read(f, buf + total, 0x10000 - total)) > 0) {
+    total += n;
+    if (total >= 0x10000) break;
+  }
+  spike_file_close(f);
+
+  if (total == 0) return;
+  buf[total] = '\0';
+
+  int current_line = 1;
+  char *line_start = buf;
+  for (int j = 0; j < total; j++) {
+    if (buf[j] == '\n') {
+      if (current_line == line) {
+        char line_buf[256];
+        int len = &buf[j] - line_start;
+        if (len > 255) len = 255;
+        memcpy(line_buf, line_start, len);
+        line_buf[len] = '\0';
+        sprint("%s\n", line_buf);
+        return;
+      }
+      current_line++;
+      line_start = &buf[j + 1];
+    }
+  }
 }
