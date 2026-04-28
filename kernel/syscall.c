@@ -17,6 +17,19 @@
 #include "spike_interface/spike_utils.h"
 
 //
+// semaphore implementation
+//
+#define NSEM 16
+
+typedef struct {
+  int value;
+  int used;
+  process *wait_head;
+} sem_t;
+
+static sem_t sems[NSEM];
+
+//
 // implement the SYS_user_print syscall
 //
 ssize_t sys_user_print(const char* buf, size_t n) {
@@ -97,6 +110,61 @@ ssize_t sys_user_yield() {
 }
 
 //
+// implement the SYS_user_sem_new syscall
+//
+int sys_user_sem_new(int init_val) {
+  for (int i = 0; i < NSEM; i++) {
+    if (!sems[i].used) {
+      sems[i].used = 1;
+      sems[i].value = init_val;
+      sems[i].wait_head = NULL;
+      return i;
+    }
+  }
+  return -1;
+}
+
+//
+// implement the SYS_user_sem_P syscall
+//
+ssize_t sys_user_sem_P(int sem_id) {
+  if (sem_id < 0 || sem_id >= NSEM || !sems[sem_id].used) return -1;
+  sems[sem_id].value--;
+  if (sems[sem_id].value < 0) {
+    current->status = BLOCKED;
+    current->queue_next = NULL;
+    if (sems[sem_id].wait_head == NULL) {
+      sems[sem_id].wait_head = current;
+    } else {
+      process *p = sems[sem_id].wait_head;
+      while (p->queue_next) p = p->queue_next;
+      p->queue_next = current;
+    }
+    current->trapframe->regs.a0 = 0;
+    schedule();
+  }
+  return 0;
+}
+
+//
+// implement the SYS_user_sem_V syscall
+//
+ssize_t sys_user_sem_V(int sem_id) {
+  if (sem_id < 0 || sem_id >= NSEM || !sems[sem_id].used) return -1;
+  sems[sem_id].value++;
+  if (sems[sem_id].value <= 0) {
+    if (sems[sem_id].wait_head) {
+      process *p = sems[sem_id].wait_head;
+      sems[sem_id].wait_head = p->queue_next;
+      p->queue_next = NULL;
+      p->status = READY;
+      insert_to_ready_queue(p);
+    }
+  }
+  return 0;
+}
+
+//
 // [a0]: the syscall number; [a1] ... [a7]: arguments to the syscalls.
 // returns the code of success, (e.g., 0 means success, fail for otherwise)
 //
@@ -115,6 +183,13 @@ long do_syscall(long a0, long a1, long a2, long a3, long a4, long a5, long a6, l
       return sys_user_fork();
     case SYS_user_yield:
       return sys_user_yield();
+    // added for semaphore
+    case SYS_user_sem_new:
+      return sys_user_sem_new(a1);
+    case SYS_user_sem_P:
+      return sys_user_sem_P(a1);
+    case SYS_user_sem_V:
+      return sys_user_sem_V(a1);
     default:
       panic("Unknown syscall %ld \n", a0);
   }
