@@ -169,6 +169,9 @@ int free_process( process* proc ) {
   // as it is different from regular OS, which needs to run 7x24.
   proc->status = ZOMBIE;
 
+  // wake up parent if it is waiting
+  wake_up( proc );
+
   return 0;
 }
 
@@ -260,4 +263,44 @@ int do_fork( process* parent)
   insert_to_ready_queue( child );
 
   return child->pid;
+}
+
+//
+// implements wait syscall in kernel. added @lab4_challenge3
+//
+int do_wait( uint64 pid ) {
+  if ( pid == -1 ) {
+    int found = 0;
+    for ( int i = 0; i < NPROC; i++ ) {
+      if ( procs[i].parent == current ) {
+        found = 1;
+        if ( procs[i].status == ZOMBIE ) {
+          procs[i].status = FREE;
+          return procs[i].pid;
+        }
+      }
+    }
+    if ( found == 0 ) {
+      return -1;
+    } else {
+      insert_to_block_queue( current );
+      schedule();
+      return -1;
+    }
+  } else if ( pid < NPROC ) {
+    process* child = &procs[pid];
+    if ( child->parent != current ) {
+      return -1;
+    }
+    if ( child->status != ZOMBIE ) {
+      insert_to_block_queue( current );
+      schedule();
+      return -1;
+    } else {
+      child->status = FREE;
+      return pid;
+    }
+  } else {
+    return -1;
+  }
 }

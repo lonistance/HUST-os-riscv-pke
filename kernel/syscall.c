@@ -14,6 +14,9 @@
 #include "vmm.h"
 #include "sched.h"
 #include "proc_file.h"
+#include "elf.h"
+#include "memlayout.h"
+#include "vfs.h"
 
 #include "spike_interface/spike_utils.h"
 
@@ -80,6 +83,143 @@ uint64 sys_user_free_page(uint64 va) {
 ssize_t sys_user_fork() {
   sprint("User call fork.\n");
   return do_fork( current );
+}
+
+//
+// kerenl entry point of wait. added @lab4_challenge3
+//
+ssize_t sys_user_wait(uint64 pid) {
+  sprint("User call wait for pid:%ld.\n", pid);
+  return do_wait(pid);
+}
+
+//
+// kerenl entry point of exec. added @lab4_challenge2
+//
+ssize_t sys_user_exec(char *pathva, char *argva) {
+  char* pathpa = (char*)user_va_to_pa((pagetable_t)(current->pagetable), pathva);
+  char* argpa = (char*)user_va_to_pa((pagetable_t)(current->pagetable), argva);
+
+  int fd = do_open(pathpa, O_RDONLY);
+  if (fd < 0) return -1;
+
+  // clean up old CODE and DATA segments
+  for (int i = 0; i < current->total_mapped_region; i++) {
+    if (current->mapped_info[i].seg_type == CODE_SEGMENT ||
+        current->mapped_info[i].seg_type == DATA_SEGMENT) {
+      for (int j = 0; j < current->mapped_info[i].npages; j++) {
+        uint64 va = current->mapped_info[i].va + j * PGSIZE;
+        pte_t *pte = page_walk(current->pagetable, va, 0);
+        if (pte && (*pte & PTE_V)) {
+          uint64 pa = PTE2PA(*pte);
+          // CODE_SEGMENT pages are shared with parent (do_fork maps without copying).
+          // Freeing them would corrupt the parent's code. Only free DATA_SEGMENT pages.
+          if (current->mapped_info[i].seg_type == DATA_SEGMENT) {
+            free_page((void*)pa);
+          }
+          *pte = 0;
+        }
+      }
+      current->mapped_info[i].va = 0;
+      current->mapped_info[i].npages = 0;
+      current->mapped_info[i].seg_type = 0;
+    }
+  }
+
+  // reset heap
+  current->user_heap.heap_top = USER_FREE_ADDRESS_START;
+  current->user_heap.heap_bottom = USER_FREE_ADDRESS_START;
+  current->user_heap.free_pages_count = 0;
+  current->mapped_info[HEAP_SEGMENT].npages = 0;
+
+  // load new ELF from file descriptor using vfs_read
+  struct file *pfile = get_opened_file(fd);
+
+  elf_header ehdr;
+  vfs_lseek(pfile, 0, SEEK_SET);
+  if (vfs_read(pfile, (char *)&ehdr, sizeof(ehdr)) != sizeof(ehdr)) {
+    do_close(fd);
+    return -1;
+  }
+  if (ehdr.magic != ELF_MAGIC) {
+    do_close(fd);
+    return -1;
+  }
+
+  sprint("Application: %s\n", pathpa);
+
+  current->trapframe->epc = ehdr.entry;
+
+  elf_prog_header ph_addr;
+  for (int i = 0, off = ehdr.phoff; i < ehdr.phnum; i++, off += sizeof(ph_addr)) {
+    vfs_lseek(pfile, off, SEEK_SET);
+    if (vfs_read(pfile, (char *)&ph_addr, sizeof(ph_addr)) != sizeof(ph_addr)) {
+      do_close(fd);
+      return -1;
+    }
+
+    if (ph_addr.type != ELF_PROG_LOAD) continue;
+    if (ph_addr.memsz < ph_addr.filesz) {
+      do_close(fd);
+      return -1;
+    }
+    if (ph_addr.vaddr + ph_addr.memsz < ph_addr.vaddr) {
+      do_close(fd);
+      return -1;
+    }
+
+    void *pa = alloc_page();
+    if (pa == 0) panic("uvmalloc mem alloc failed\n");
+    memset(pa, 0, PGSIZE);
+
+    user_vm_map((pagetable_t)current->pagetable, ph_addr.vaddr, PGSIZE, (uint64)pa,
+           prot_to_type(PROT_WRITE | PROT_READ | PROT_EXEC, 1));
+
+    vfs_lseek(pfile, ph_addr.off, SEEK_SET);
+    if (vfs_read(pfile, (char *)pa, ph_addr.filesz) != ph_addr.filesz) {
+      do_close(fd);
+      return -1;
+    }
+
+    int j;
+    for (j = 0; j < PGSIZE / sizeof(mapped_region); j++)
+      if (current->mapped_info[j].va == 0x0) break;
+
+    current->mapped_info[j].va = ph_addr.vaddr;
+    current->mapped_info[j].npages = 1;
+
+    if (ph_addr.flags == (SEGMENT_READABLE | SEGMENT_EXECUTABLE)) {
+      current->mapped_info[j].seg_type = CODE_SEGMENT;
+      sprint("CODE_SEGMENT added at mapped info offset:%d\n", j);
+    } else if (ph_addr.flags == (SEGMENT_READABLE | SEGMENT_WRITABLE)) {
+      current->mapped_info[j].seg_type = DATA_SEGMENT;
+      sprint("DATA_SEGMENT added at mapped info offset:%d\n", j);
+    } else {
+      panic("unknown program segment encountered, segment flag:%d.\n", ph_addr.flags);
+    }
+    current->total_mapped_region++;
+  }
+
+  do_close(fd);
+
+  // set up argument passing on user stack
+  uint64 stack_va = USER_STACK_TOP - PGSIZE;
+  uint64 stack_pa = lookup_pa(current->pagetable, stack_va);
+  if (stack_pa == 0) panic("sys_user_exec: stack not mapped\n");
+
+  // layout on stack page:
+  // [0x00] argv[0] pointer = stack_va + 0x10
+  // [0x08] argv[1] = NULL
+  // [0x10] argument string
+  *(uint64 *)(stack_pa + 0) = stack_va + 0x10;
+  *(uint64 *)(stack_pa + 8) = 0;
+  strcpy((char *)(stack_pa + 0x10), argpa);
+
+  current->trapframe->regs.a0 = 1;           // argc
+  current->trapframe->regs.a1 = stack_va;    // argv
+  current->trapframe->regs.sp = USER_STACK_TOP;
+
+  return 0;
 }
 
 //
@@ -263,6 +403,10 @@ long do_syscall(long a0, long a1, long a2, long a3, long a4, long a5, long a6, l
       return sys_user_link((char *)a1, (char *)a2);
     case SYS_user_unlink:
       return sys_user_unlink((char *)a1);
+    case SYS_user_exec:
+      return sys_user_exec((char *)a1, (char *)a2);
+    case SYS_user_wait:
+      return sys_user_wait(a1);
     default:
       panic("Unknown syscall %ld \n", a0);
   }

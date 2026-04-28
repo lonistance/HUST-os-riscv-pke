@@ -6,6 +6,7 @@
 #include "spike_interface/spike_utils.h"
 
 process* ready_queue_head = NULL;
+process* block_queue_head = NULL;
 
 //
 // insert a process, proc, into the END of ready queue.
@@ -32,6 +33,28 @@ void insert_to_ready_queue( process* proc ) {
   proc->status = READY;
   proc->queue_next = NULL;
 
+  return;
+}
+
+//
+// insert a process, proc, into the END of block queue.
+//
+void insert_to_block_queue( process* proc ) {
+  if( block_queue_head == NULL ){
+    proc->status = BLOCKED;
+    proc->queue_next = NULL;
+    block_queue_head = proc;
+    return;
+  }
+
+  process *p;
+  for( p=block_queue_head; p->queue_next!=NULL; p=p->queue_next )
+    if( p == proc ) return;
+
+  if( p==proc ) return;
+  p->queue_next = proc;
+  proc->status = BLOCKED;
+  proc->queue_next = NULL;
   return;
 }
 
@@ -70,4 +93,29 @@ void schedule() {
   current->status = RUNNING;
   sprint( "going to schedule process %d to run.\n", current->pid );
   switch_to( current );
+}
+
+// when a process is done, wake up the parent process from block queue, and put it into ready queue.
+void wake_up( process* proc ) {
+  process* wake = block_queue_head;
+  if ( wake == NULL ) {
+    return;
+  } else if ( wake == proc->parent) {
+    block_queue_head = wake->queue_next;
+    wake->status = READY;
+    insert_to_ready_queue( wake );
+    return;
+  }
+  else {
+    while ( wake->queue_next != NULL ) {
+      if ( wake->queue_next == proc->parent ) {
+        process* tmp = wake->queue_next;
+        wake->queue_next = tmp->queue_next;
+        tmp->status = READY;
+        insert_to_ready_queue( tmp );
+        return;
+      }
+      wake = wake->queue_next;
+    }
+  }
 }

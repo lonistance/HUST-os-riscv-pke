@@ -9,6 +9,7 @@
 // file operations
 //
 int do_open(char *pathname, int flags);
+struct file *get_opened_file(int fd);
 int do_read(int fd, char *buf, uint64 count);
 int do_write(int fd, char *buf, uint64 count);
 int do_lseek(int fd, int offset, int whence);
