@@ -12,6 +12,7 @@
 #include "util/functions.h"
 
 #include "spike_interface/spike_utils.h"
+#include "spike_interface/atomic.h"
 
 //
 // implement the SYS_user_print syscall
@@ -25,13 +26,28 @@ ssize_t sys_user_print(const char* buf, size_t n) {
 //
 // implement the SYS_user_exit syscall
 //
+static volatile int finished_harts = 0;
+static spinlock_t exit_lock = SPINLOCK_INIT;
+
 ssize_t sys_user_exit(uint64 code) {
   int hartid = read_tp();
   sprint("hartid = %d: User exit with code:%d.\n", hartid, code);
-  // in lab1, PKE considers only one app (one process). 
-  // therefore, shutdown the system when the app calls exit()
-  sprint("hartid = %d: shutdown with code:%d.\n", hartid, code);
-  shutdown(code);
+
+  spinlock_lock(&exit_lock);
+  finished_harts++;
+  spinlock_unlock(&exit_lock);
+
+  if (hartid == 0) {
+    while (finished_harts < NCPU) {
+      // spin wait for other harts to finish
+    }
+    sprint("hartid = %d: shutdown with code:%d.\n", hartid, code);
+    shutdown(code);
+  } else {
+    while (1) {
+      asm volatile("wfi");
+    }
+  }
 }
 
 //

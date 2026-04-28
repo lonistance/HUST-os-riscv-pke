@@ -29,6 +29,7 @@ void load_user_program(process *proc, int hartid) {
   memset(proc->trapframe, 0, sizeof(trapframe));
   proc->kstack = kstack_addr;
   proc->trapframe->regs.sp = stack_addr;
+  proc->trapframe->regs.tp = hartid;
 
   // load_bincode_from_host_elf() is defined in kernel/elf.c
   load_bincode_from_host_elf(proc, hartid);

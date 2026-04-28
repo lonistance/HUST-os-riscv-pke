@@ -28,7 +28,7 @@ extern uint64 htif;
 extern uint64 g_mem_size;
 // struct riscv_regs is define in kernel/riscv.h, and g_itrframe is used to save
 // registers when interrupt hapens in M mode. added @lab1_2
-riscv_regs g_itrframe;
+riscv_regs g_itrframe[NCPU];
 
 //
 // get the information of HTIF (calling interface) and the emulated memory by
@@ -90,19 +90,27 @@ void timerinit(uintptr_t hartid) {
 //
 // m_start: machine mode C entry point.
 //
+static volatile int init_done = 0;
+
 void m_start(uintptr_t hartid, uintptr_t dtb) {
   // init the spike file interface (stdin,stdout,stderr)
   // functions with "spike_" prefix are all defined in codes under spike_interface/,
   // sprint is also defined in spike_interface/spike_utils.c
-  spike_file_init();
+  if (hartid == 0) {
+    spike_file_init();
+    init_dtb(dtb);
+    __sync_synchronize();
+    init_done = 1;
+  } else {
+    while (!init_done) {
+      // spin wait for hart 0 to finish initialization
+    }
+    __sync_synchronize();
+  }
   sprint("In m_start, hartid:%d\n", hartid);
 
-  // init HTIF (Host-Target InterFace) and memory by using the Device Table Blob (DTB)
-  // init_dtb() is defined above.
-  init_dtb(dtb);
-
   // save the address of trap frame for interrupt in M mode to "mscratch". added @lab1_2
-  write_csr(mscratch, &g_itrframe);
+  write_csr(mscratch, &g_itrframe[hartid]);
 
   // set previous privilege mode to S (Supervisor), and will enter S mode after 'mret'
   // write_csr is a macro defined in kernel/riscv.h
