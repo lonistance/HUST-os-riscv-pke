@@ -26,6 +26,8 @@ int do_unlink(char *path);
 
 void fs_init(void);
 
+struct file *get_opened_file(int fd);
+
 // data structure that manages all openned files in a PCB
 typedef struct proc_file_management_t {
   struct dentry *cwd;  // vfs dentry of current working directory

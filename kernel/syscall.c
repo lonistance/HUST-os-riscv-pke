@@ -14,6 +14,8 @@
 #include "vmm.h"
 #include "sched.h"
 #include "proc_file.h"
+#include "elf.h"
+#include "memlayout.h"
 
 #include "spike_interface/spike_utils.h"
 
@@ -216,6 +218,118 @@ ssize_t sys_user_unlink(char * vfn){
 }
 
 //
+// exec: replace current process with a new program.
+// added @lab4_challenge2
+//
+ssize_t sys_user_exec(char *pathva) {
+  char* pathpa = (char*)user_va_to_pa((pagetable_t)(current->pagetable), pathva);
+
+  int fd = do_open(pathpa, O_RDONLY);
+  if (fd < 0) return -1;
+
+  // clean up old CODE and DATA segments
+  for (int i = 0; i < current->total_mapped_region; i++) {
+    if (current->mapped_info[i].seg_type == CODE_SEGMENT ||
+        current->mapped_info[i].seg_type == DATA_SEGMENT) {
+      for (int j = 0; j < current->mapped_info[i].npages; j++) {
+        uint64 va = current->mapped_info[i].va + j * PGSIZE;
+        pte_t *pte = page_walk(current->pagetable, va, 0);
+        if (pte && (*pte & PTE_V)) {
+          uint64 pa = PTE2PA(*pte);
+          free_page((void*)pa);
+          *pte = 0;
+        }
+      }
+      current->mapped_info[i].va = 0;
+      current->mapped_info[i].npages = 0;
+      current->mapped_info[i].seg_type = 0;
+    }
+  }
+
+  // reset heap
+  current->user_heap.heap_top = USER_FREE_ADDRESS_START;
+  current->user_heap.heap_bottom = USER_FREE_ADDRESS_START;
+  current->user_heap.free_pages_count = 0;
+  current->mapped_info[HEAP_SEGMENT].npages = 0;
+
+  // load new ELF from file descriptor using vfs_read (do_read uses strcpy, unsuitable for binary)
+  struct file *pfile = get_opened_file(fd);
+
+  elf_header ehdr;
+  vfs_lseek(pfile, 0, SEEK_SET);
+  if (vfs_read(pfile, (char *)&ehdr, sizeof(ehdr)) != sizeof(ehdr)) {
+    do_close(fd);
+    return -1;
+  }
+  if (ehdr.magic != ELF_MAGIC) {
+    do_close(fd);
+    return -1;
+  }
+
+  sprint("Application: %s\n", pathpa);
+
+  current->trapframe->epc = ehdr.entry;
+
+  elf_prog_header ph_addr;
+  for (int i = 0, off = ehdr.phoff; i < ehdr.phnum; i++, off += sizeof(ph_addr)) {
+    vfs_lseek(pfile, off, SEEK_SET);
+    if (vfs_read(pfile, (char *)&ph_addr, sizeof(ph_addr)) != sizeof(ph_addr)) {
+      do_close(fd);
+      return -1;
+    }
+
+    if (ph_addr.type != ELF_PROG_LOAD) continue;
+    if (ph_addr.memsz < ph_addr.filesz) {
+      do_close(fd);
+      return -1;
+    }
+    if (ph_addr.vaddr + ph_addr.memsz < ph_addr.vaddr) {
+      do_close(fd);
+      return -1;
+    }
+
+    void *pa = alloc_page();
+    if (pa == 0) panic("uvmalloc mem alloc failed\n");
+    memset(pa, 0, PGSIZE);
+
+    user_vm_map((pagetable_t)current->pagetable, ph_addr.vaddr, PGSIZE, (uint64)pa,
+           prot_to_type(PROT_WRITE | PROT_READ | PROT_EXEC, 1));
+
+    vfs_lseek(pfile, ph_addr.off, SEEK_SET);
+    if (vfs_read(pfile, (char *)pa, ph_addr.filesz) != ph_addr.filesz) {
+      do_close(fd);
+      return -1;
+    }
+
+    // record the vm region in proc->mapped_info
+    int j;
+    for (j = 0; j < PGSIZE / sizeof(mapped_region); j++)
+      if (current->mapped_info[j].va == 0x0) break;
+
+    current->mapped_info[j].va = ph_addr.vaddr;
+    current->mapped_info[j].npages = 1;
+
+    if (ph_addr.flags == (SEGMENT_READABLE | SEGMENT_EXECUTABLE)) {
+      current->mapped_info[j].seg_type = CODE_SEGMENT;
+      sprint("CODE_SEGMENT added at mapped info offset:%d\n", j);
+    } else if (ph_addr.flags == (SEGMENT_READABLE | SEGMENT_WRITABLE)) {
+      current->mapped_info[j].seg_type = DATA_SEGMENT;
+      sprint("DATA_SEGMENT added at mapped info offset:%d\n", j);
+    } else {
+      panic("unknown program segment encountered, segment flag:%d.\n", ph_addr.flags);
+    }
+    current->total_mapped_region++;
+  }
+
+  do_close(fd);
+
+  // reset stack pointer
+  current->trapframe->regs.sp = USER_STACK_TOP;
+
+  return 0;
+}
+
+//
 // [a0]: the syscall number; [a1] ... [a7]: arguments to the syscalls.
 // returns the code of success, (e.g., 0 means success, fail for otherwise)
 //
@@ -263,6 +377,8 @@ long do_syscall(long a0, long a1, long a2, long a3, long a4, long a5, long a6, l
       return sys_user_link((char *)a1, (char *)a2);
     case SYS_user_unlink:
       return sys_user_unlink((char *)a1);
+    case SYS_user_exec:
+      return sys_user_exec((char *)a1);
     default:
       panic("Unknown syscall %ld \n", a0);
   }
