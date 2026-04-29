@@ -10,6 +10,7 @@
 #include "vmm.h"
 #include "sched.h"
 #include "util/functions.h"
+#include "string.h"
 
 #include "spike_interface/spike_utils.h"
 
@@ -54,16 +55,36 @@ void handle_mtimer_trap() {
 void handle_user_page_fault(uint64 mcause, uint64 sepc, uint64 stval) {
   sprint("handle_page_fault: %lx\n", stval);
   switch (mcause) {
-    case CAUSE_STORE_PAGE_FAULT:
+    case CAUSE_STORE_PAGE_FAULT: {
       // TODO (lab2_3): implement the operations that solve the page fault to
       // dynamically increase application stack.
       // hint: first allocate a new physical page, and then, maps the new page to the
       // virtual address that causes the page fault.
       //panic( "You need to implement the operations that actually handle the page fault in lab2_3.\n" );
+      pte_t *pte = page_walk(current->pagetable, stval, 0);
+      if (pte && (*pte & PTE_V) && (*pte & PTE_COW)) {
+        // copy-on-write page fault
+        uint64 old_pa = PTE2PA(*pte);
+        int ref = get_page_ref(old_pa);
+        if (ref == 1) {
+          // only one reference, just restore write permission
+          *pte = (*pte | PTE_W | PTE_D) & ~PTE_COW;
+        } else {
+          // multiple references, allocate a new page and copy
+          void* new_pa = alloc_page();
+          memcpy(new_pa, (void*)old_pa, PGSIZE);
+          *pte = PA2PTE((uint64)new_pa) | prot_to_type(PROT_WRITE | PROT_READ, 1) | PTE_V;
+          decr_page_ref(old_pa);
+          set_page_ref((uint64)new_pa, 1);
+        }
+        flush_tlb();
+        break;
+      }
       void* pa = alloc_page();
       user_vm_map(current->pagetable, ROUNDDOWN(stval, PGSIZE), PGSIZE, (uint64)pa,
              prot_to_type(PROT_WRITE | PROT_READ, 1));
       break;
+    }
     default:
       sprint("unknown page fault.\n");
       break;

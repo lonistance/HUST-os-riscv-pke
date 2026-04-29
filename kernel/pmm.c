@@ -22,6 +22,38 @@ typedef struct node {
 // g_free_mem_list is the head of the list of free physical memory pages
 static list_node g_free_mem_list;
 
+#define MAX_PHY_PAGES (PKE_MAX_ALLOWABLE_RAM / PGSIZE)
+static uint8_t page_ref_count[MAX_PHY_PAGES];
+
+static inline int pa2idx(uint64 pa) {
+  return (pa - DRAM_BASE) / PGSIZE;
+}
+
+void incr_page_ref(uint64 pa) {
+  int idx = pa2idx(pa);
+  if (idx >= 0 && idx < MAX_PHY_PAGES)
+    page_ref_count[idx]++;
+}
+
+void decr_page_ref(uint64 pa) {
+  int idx = pa2idx(pa);
+  if (idx >= 0 && idx < MAX_PHY_PAGES && page_ref_count[idx] > 0)
+    page_ref_count[idx]--;
+}
+
+int get_page_ref(uint64 pa) {
+  int idx = pa2idx(pa);
+  if (idx >= 0 && idx < MAX_PHY_PAGES)
+    return page_ref_count[idx];
+  return 0;
+}
+
+void set_page_ref(uint64 pa, int val) {
+  int idx = pa2idx(pa);
+  if (idx >= 0 && idx < MAX_PHY_PAGES)
+    page_ref_count[idx] = val;
+}
+
 //
 // actually creates the freepage list. each page occupies 4KB (PGSIZE), i.e., small page.
 // PGSIZE is defined in kernel/riscv.h, ROUNDUP is defined in util/functions.h.
@@ -85,4 +117,5 @@ void pmm_init() {
   sprint("kernel memory manager is initializing ...\n");
   // create the list of free pages
   create_freepage_list(free_mem_start_addr, free_mem_end_addr);
+  memset(page_ref_count, 0, sizeof(page_ref_count));
 }

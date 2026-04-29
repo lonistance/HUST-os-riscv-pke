@@ -189,11 +189,22 @@ void user_vm_unmap(pagetable_t page_dir, uint64 va, uint64 size, int free) {
   // as naive_free reclaims only one page at a time, you only need to consider one page
   // to make user/app_naive_malloc to behave correctly.
   //panic( "You have to implement user_vm_unmap to free pages using naive_free in lab2_2.\n" );
-  uint64 pa = lookup_pa(page_dir, va);
-  if (pa == 0) {
-    panic("user_vm_unmap: va 0x%lx not mapped\n", va);
+  uint64 first, last;
+  for (first = ROUNDDOWN(va, PGSIZE), last = ROUNDDOWN(va + size - 1, PGSIZE);
+       first <= last; first += PGSIZE) {
+    pte_t *pte = page_walk(page_dir, first, 0);
+    if (pte == 0 || (*pte & PTE_V) == 0) {
+      panic("user_vm_unmap: va 0x%lx not mapped\n", first);
+    }
+    uint64 pa = PTE2PA(*pte);
+    if (free) {
+      decr_page_ref(pa);
+      if (get_page_ref(pa) == 0) {
+        free_page((void*)pa);
+      }
+    }
+    *pte = 0;
   }
-  free_page((void*)pa);
 }
 
 //
