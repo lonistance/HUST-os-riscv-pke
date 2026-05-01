@@ -1,0 +1,1161 @@
+lab1_challenge2 打印异常代码行
+给定应用
+user/app_errorline.c（和lab1_2的应用一致）
+  1 /*                                                                             
+  2  * Below is the given application for lab1_challenge2 (same as lab1_2).
+  3  * This app attempts to issue M-mode instruction in U-mode, and consequently raises an exception.
+  4  */
+  5 
+  6 #include "user_lib.h"
+  7 #include "util/types.h"
+  8 
+  9 int main(void) {
+ 10   printu("Going to hack the system by running privilege instructions.\n");
+ 11   // we are now in U(user)-mode, but the "csrw" instruction requires M-mode privilege.
+ 12   // Attempting to execute such instruction will raise illegal instruction exception.
+ 13   asm volatile("csrw sscratch, 0");
+ 14   exit(0);
+ 15 }
+ 16 
+以上程序试图在用户态读取在内核态才能读取的寄存器sscratch，因此此处会触发illegal instruction异常，你的任务是修改内核（包括machine文件夹下）的代码，使得用户程序在发生异常时，内核能够输出触发异常的用户程序的源文件名和对应代码行，如上面的应用预期输出如下：
+
+In m_start, hartid:0
+HTIF is available!
+(Emulated) memory size: 2048 MB
+Enter supervisor mode...
+Application: obj/app_errorline
+Application program entry point (virtual address): 0x0000000081000000
+Switch to user mode...
+Going to hack the system by running privilege instructions.
+Runtime error at user/app_errorline.c:13
+  asm volatile("csrw sscratch, 0");
+Illegal instruction!
+System is shutting down with exit code -1.
+
+实验内容
+本实验为挑战实验，基础代码将继承和使用lab1_3完成后的代码：
+
+（先提交lab1_3的答案，然后）切换到lab1_challenge2_errorline、继承lab1_3（注意，不是继承lab1_challenge1_backtrace！PKE的挑战实验之间无继承关联）中所做修改：
+//切换到lab1_challenge2_errorline
+$ git checkout lab1_challenge2_errorline
+
+//继承lab1_3以及之前的答案
+$ git merge lab1_3_irq -m "continue to work on lab1_challenge1"
+注意：**不同于基础实验，挑战实验的基础代码具有更大的不完整性，可能无法直接通过构造过程。**同样，不同于基础实验，我们在代码中也并未专门地哪些地方的代码需要填写，哪些地方的代码无须填写。这样，我们留给读者更大的“想象空间”。
+
+本实验的具体要求为：通过修改PKE内核（包括machine文件夹下的代码），使得用户程序在发生异常时，内核能够输出触发异常的用户程序的源文件名和对应代码行。
+注意：虽然在示例的app_errorline.c中只触发了非法指令异常，但最终测试时你的内核也应能够对其他会导致panic的异常和其他源文件输出正确的结果。
+文件名规范：需要包含路径，如果是用户源程序发生的错误，路径为相对路径，如果是调用的标准库内发生的错误，路径为绝对路径。
+为了降低挑战的难度，本实验在elf.c中给出了debug_line段的解析函数make_addr_line。这个函数接受三个参数，ctx为elf文件的上下文指针，这个可以参考文件中的其他函数；debug_line为指向.debug_line段数据的指针，你需要读取elf文件中名为.debug_line的段保存到缓冲区中，然后将缓冲区指针传入这个参数；length为.debug_line段数据的长度。
+函数调用结束后，process结构体的dir、file、line三个指针会各指向一个数组，dir数组存储所有代码文件的文件夹路径字符串指针，如/home/abc/bcd的文件夹路径为/home/abc，本项目user文件夹下的app_errorline.c文件夹路径为user；file数组存储所有代码文件的文件名字符串指针以及其文件夹路径在dir数组中的索引；line数组存储所有指令地址，代码行号，文件名在file数组中的索引三者的映射关系。如某文件第3行为a = 0，被编译成地址为0x1234处的汇编代码li ax, 0和0x1238处的汇编代码sd 0(s0), ax。那么file数组中就包含两项，addr属性分别为0x1234和0x1238，line属性为3，file属性为“某文件”的文件名在file数组中的索引。
+注意：dir、file、line三个数组会依次存储在debug_line数据缓冲区之后，dir数组和file数组的大小为64。所以如果你用静态数组来存储debug_line段数据，那么这个数组必须足够大；或者你也可以把debug_line直接放在程序所有需映射的段数据之后，这样可以保证有足够大的动态空间。
+
+实验指导
+为完成该挑战，需要利用用户程序编译时产生的调试信息，目前最广泛使用的调试信息格式是DWARF，可以参考这里了解其格式，该网站的参考文献中也给出了DWARF的完整文档地址，必要时可参考。
+你对内核代码的修改可能包含以下内容：
+修改读取elf文件的代码，找到包含调试信息的段，将其内容保存起来（可以保存在用户程序的地址空间中）
+在适当的位置调用debug_line段解析函数，对调试信息进行解析，构造指令地址-源代码行号-源代码文件名的对应表，注意，连续行号对应的不一定是连续的地址，因为一条源代码可以对应多条指令。
+在异常中断处理函数中，通过相应寄存器找到触发异常的指令地址，然后在上述表中查找地址对应的源代码行号和文件名输出
+
+3.7 lab1_challenge3 多核启动及运行
+之前的实验都在单核环境下进行。在本次实验中，你需要修改操作系统内核使其支持两核并发运行，并且在每个核上加载一个程序运行，等到两个程序都执行完毕后退出并关闭模拟器。
+
+给定应用
+user/app0.c
+#include "user_lib.h"
+#include "util/types.h"
+
+int main(void) {
+  printu(">>> app0 is expected to be executed by hart0\n");
+  exit(0);
+}
+user/app1.c
+#include "user_lib.h"
+#include "util/types.h"
+
+int main(void) {
+  printu(">>> app1 is expected to be executed by hart1\n");
+  exit(0);
+}
+在本次实验中，给定两个简单的用户程序，每个程序会输出一句话。你需要让每个核分别加载一个程序，并能够正确运行，输出相应内容然后退出。
+
+实验内容
+本实验为挑战实验，基础代码将继承和使用lab1_3完成后的代码：
+
+先提交lab1_3的答案，然后切换到lab1_challenge3_multicore、继承lab1_3（注意，不是继承lab1_challenge1_backtrace和lab1_challenge2_errorline！PKE的挑战实验之间无继承关联）中所做修改：
+//切换到lab1_challenge3_multicore
+$ git checkout lab1_challenge3_multicore
+
+//继承lab1_3以及之前的答案
+$ git merge lab1_3_irq -m "continue to work on lab1_challenge3"
+注意：不同于基础实验，挑战实验的基础代码具有更大的不完整性，可能无法直接通过构造过程。 同样，不同于基础实验，我们在代码中也并未专门地哪些地方的代码需要填写，哪些地方的代码无须填写。这样，我们留给读者更大的“想象空间”。
+
+在RISC-V处理器中，每一个CPU称作一个hart(hardware thread)，并从0开始编号。此实验要求启动两个CPU，它们的编号分别为0和1。
+
+本实验中，你需要修改内核代码，使得riscv-pke能够通过spike启动两个CPU(hart)，并且让CPU0执行app0，让CPU1执行app1。
+user0.lds和user1.lds中规定了app0从0x81000000处开始加载，app1从0x81500000处开始加载。
+kernel/config.h中的NCPU规定了操作系统内核支持的核数，在本实验设置为2，即需要能够通过spike -p2 riscv-pke app0 app1让pke正确地启动两核并发的操作系统并执行app0和app1。
+内核中有很多使用sprint输出的内容，为了分别每一条输出是哪个核执行的，你需要在相应的sprint处添加一个hartid的输出项。你应当思考并阅读和核数有关的内核代码，并且任意添加和修改，使得最终运行的输出对齐以下输出
+HTIF is available!
+(Emulated) memory size: 2048 MB
+In m_start, hartid:0
+hartid = 0: Enter supervisor mode...
+hartid = 0: Application: obj/app0
+hartid = 0: Application program entry point (virtual address): 0x0000000081000000
+hartid = 0: Switch to user mode...
+In m_start, hartid:1
+hartid = 1: Enter supervisor mode...
+hartid = 1: Application: obj/app1
+hartid = 1: Application program entry point (virtual address): 0x0000000085000000
+hartid = 1: Switch to user mode...
+hartid = 0: >>> app0 is expected to be executed by hart0
+hartid = 1: >>> app1 is expected to be executed by hart1
+hartid = 0: User exit with code:0.
+hartid = 1: User exit with code:0.
+hartid = 0: shutdown with code:0.
+System is shutting down with exit code 0.
+
+实验指导
+多核riscv-pke的启动与运行
+
+spike模拟器支持-p选项来模拟多个核，在pke中，通过spike -p2 riscv-pke ...会让两个核并发地从kernel/machine/mentry.S中的_mentry开始执行，并且每个核都会如同之前单核启动一样独立对操作系统进行初始化。在硬件语境下，每一个核都是一个硬件线程hart，可以类比软件线程理解。
+
+更具体地来讲，每个核从_mentry开始执行，然后进入minit.c中的m_start，初始化模拟器设备和接口，设置中断信息等，再进入到S模式执行s_start对操作系统进行初始化，使用load_user_program加载应用并通过switch_to切换至用户程序。
+
+这样启动和执行会带来一些需要处理的问题
+
+spike模拟器通过HTIF与host机器的物理设备进行交互，在pke启动时，会在M mode对spike模拟器的一些虚拟设备和HTIF接口进行初始化。这个初始化的过程只能被执行一次，而非每个核都执行一次。并且在spike和HTIF初始化完成之前，需要用同步机制保证每个核都不会访问他们相应的资源。
+每个核的时钟周期和时钟中断应该是独立的，不能受其他核的干扰。即你需要分开管理每个hart上运行应用的tick。
+单核实验中，pke会从命令行第一个参数加载应用程序，但是本次实验需要从命令行前两个参数加载两个程序。你需要阅读并修改elf.c来让pke能从命令行加载第二个app。
+之前的实验在单核的基础上开展，且没有内存管理机制，所以user app使用到的一些内存地址是固定的（见kernel/config.h）。即使实验基础代码在elf文件中为两个app指定了不同的起始地址，两个核同时加载并运行的它们时，其部分内存地址也会重叠并出错。你应当想办法分离两个app的内存。
+在之前的单核实验中，有一个全局的current变量来指示当前正在执行的进程，以便处理中断。然而在多核环境下，每个核的中断是独立的，在处理好中断后，各个核应当恢复到其原本执行的用户app。你需要让每个核能知道他们在执行什么app。
+在单核环境下，一个核的用户进程调用exit退出时，会立即关闭模拟器；而在多核环境下，这会强使其他核也停止工作。正确的退出方式是，同步等到所有核执行完毕之后再关闭模拟器。本次实验中，你应当让CPU0负责关闭模拟器。
+Tips
+
+如果你对多核pke的运行原理感到困惑，可以带着以下的tips去复习操作系统以及阅读pke源码：
+
+理解在多核场景下，什么资源是唯一的，什么资源是多份的。唯一的资源有：模拟器相关接口、内存和设备。多份的资源有：每个核的所有寄存器和状态信息。
+对于唯一的资源，所有核会共享，所以需要控制并发。对于多份的资源，所有核应当独立占有，所以需要隔离资源。
+如果你大致理解了多核pke的运行机制，以下内容可以帮助你实现对多核的支持：
+
+对于riscv处理器，有一个寄存器tp (thread pointer)是专门用来保存hart相关信息的，可以利用此寄存器存储每个核关于自身的信息。
+kernel/sync_utils.h提供了一个简单的同步屏障的实现，你可以通过这个同步原语实现并发控制，或者自行设计其它同步原语。
+
+
+lab2_challenge2 堆空间管理
+给定应用
+user/app_singlepageheap.c
+  1 /*
+  2  * Below is the given application for lab2_challenge2_singlepageheap.
+  3  * This app performs malloc memory.
+  4  */
+  5
+  6 #include "user_lib.h"
+  7 //#include "util/string.h"
+  8
+  9 typedef unsigned long long uint64;
+ 10
+ 11 char* strcpy(char* dest, const char* src) {
+ 12   char* d = dest;
+ 13   while ((*d++ = *src++))
+ 14     ;
+ 15   return dest;
+ 16 }
+ 17 int main(void) {
+ 18
+ 19   char str[20] = "hello, world!!!";
+ 20   char *m = (char *)better_malloc(100);
+ 21   char *p = (char *)better_malloc(50);
+ 22   if((uint64)p - (uint64)m > 512 ){
+ 23     printu("you need to manage the vm space precisely!");
+ 24     exit(-1);
+ 25   }
+ 26   better_free((void *)m);
+ 27
+ 28   strcpy(p,str);
+ 29   printu("%s\n",p);
+ 30   char *n = (char *)better_malloc(50);
+ 31
+ 32   if(m != n)
+ 33   {
+ 34     printu("your malloc is not complete.\n");
+ 35     exit(-1);
+ 36   }
+ 37 //  else{
+ 38 //    printu("0x%lx 0x%lx\n", m, n);
+ 39 //  }
+ 40   exit(0);
+ 41   return 0;
+ 42 }
+以上程序先利用better_malloc分别申请100和50个字节的一个物理页的内存，然后使用better_free释放掉100个字节，向50个字节中复制一串字符串，进行输出。原本的pke中malloc的实现是非常简化的（一次直接分配一个页面），你的挑战任务是修改内核(包括machine文件夹下)的代码，使得应用程序的malloc能够在一个物理页中分配，并对各申请块进行合理的管理，如上面的应用预期输出如下：
+
+In m_start, hartid:0
+HTIF is available!
+(Emulated) memory size: 2048 MB
+Enter supervisor mode...
+PKE kernel start 0x0000000080000000, PKE kernel end: 0x0000000080008000, PKE kernel size: 0x0000000000008000 .
+free physical memory address: [0x0000000080008000, 0x0000000087ffffff]
+kernel memory manager is initializing ...
+KERN_BASE 0x0000000080000000
+physical address of _etext is: 0x0000000080005000
+kernel page table is on
+User application is loading.
+user frame 0x0000000087fbc000, user stack 0x000000007ffff000, user kstack 0x0000000087fbb000
+Application: obj/app_singlepageheap
+Application program entry point (virtual address): 0x000000000001008a
+Switch to user mode...
+hello, world!!!
+User exit with code:0.
+System is shutting down with exit code 0.
+通过应用程序和对应的预期结果可以看出：两次申请的空间在同一页面，并且释放第一块时，不会释放整个页面，所以需要你设计合适的数据结构对各块进行管理，使得better_malloc申请的空间更加“紧凑”。
+
+
+实验内容
+本实验为挑战实验，基础代码将继承和使用lab2_3完成后的代码：
+
+（先提交lab2_3的答案，然后）切换到lab2_challenge2、继承lab2_3中所做修改：
+//切换到lab2_challenge2_singlepageheap
+$ git checkout lab2_challenge2_singlepageheap
+
+//继承lab2_challenge1以及之前的答案
+$ git merge lab2_3_pagefault -m "continue to work on lab2_challenge2"
+注意：**不同于基础实验，挑战实验的基础代码具有更大的不完整性，可能无法直接通过构造过程。**同样，不同于基础实验，我们在代码中也并未专门地哪些地方的代码需要填写，哪些地方的代码无须填写。这样，我们留给读者更大的“想象空间”。
+
+本实验的具体要求为：通过修改PKE内核（包括machine文件下的代码），实现优化后的malloc函数，使得应用程序两次申请块在同一页面，并且能够正常输出存入第二块中的字符串"hello world"。
+文件名规范：需要包含路径，如果是用户源程序发生的错误，路径为相对路径，如果是调用的标准库内发生的错误，路径为绝对路径。
+
+实验指导
+为完成该挑战，你需要对进程的虚拟地址空间进行管理，建议参考Linux的内存分配策略从而实现malloc。
+
+你对内核代码的修改可能包含以下内容：
+
+增加内存控制块数据结构对分配的内存块进行管理。
+
+修改process的数据结构以扩展对虚拟地址空间的管理，后续对于heap的扩展，需要对新增的虚拟地址添加对应的物理地址映射。
+
+设计函数对进程的虚拟地址空间进行管理，借助以上内容具体实现heap扩展。
+
+设计malloc函数和free函数对内存块进行管理。
+
+注意：本挑战的创新思路及难点就在于分配和回收策略的设计（对应malloc和free），读者应同时思考两个函数如何实现，基于紧凑性和高效率的设计目标，设计自己认为高效的分配策略。完成设计后，请读者另外编写应用，设计不同场景使用better_malloc和better_free函数，验证挑战目标以及对自己实现进行检测。
+
+
+
+lab2_challenge3 多核内存管理
+给定应用
+user/app_alloc0.c
+#include "user_lib.h"
+#include "util/types.h"
+
+#define N 5
+#define BASE 0
+
+int main(void) {
+  void *p[N];
+  
+  for (int i = 0; i < N; i++) {
+    p[i] = naive_malloc();
+    int *pi = p[i];
+    *pi = BASE + i;
+    printu("=== user alloc 0 @ vaddr 0x%x\n", p[i]);
+  }
+  
+  for (int i = 0; i < N; i++) {
+    int *pi = p[i];
+    printu("=== user0: %d\n", *pi);
+    naive_free(p[i]);
+  }
+
+  exit(0);
+}
+
+
+user/app_alloc1.c
+#include "user_lib.h"
+#include "util/types.h"
+
+#define N 5
+#define BASE 5
+
+int main(void) {
+  void *p[N];
+
+  for (int i = 0; i < N; i++) {
+    p[i] = naive_malloc();
+    int *pi = p[i];
+    *pi = BASE + i;
+    printu(">>> user alloc 1 @ vaddr 0x%x\n", p[i]);
+  }
+
+  for (int i = 0; i < N; i++) {
+    int *pi = p[i];
+    printu(">>> user 1: %d\n", *pi);
+    naive_free(p[i]);
+  }
+
+  exit(0);
+}
+
+在本次实验中，给定两个程序，每个程序会通过lab2_2实现的naive_malloc申请一些内存页，在内存页开始处写入一个int并打印内存页的虚拟地址。最后每个进程会打印自己写入内存页的数，并通过naive_free释放申请的内存页。app_alloc0.c会依次写入并输出0,1,2,3,4，app_alloc1.c会依次写入并输出5,6,7,8,9。
+
+
+实验内容
+本实验为挑战实验，基础代码将继承和使用lab2_3完成后的代码：
+
+先提交lab2_3的答案，然后切换到lab2_challenge3_multicoremem，继承lab2_3（注意，不是继承lab2_challenge1_pagefaults和lab2_challenge2_singlepageheap！PKE的挑战实验之间无继承关联）中所做修改：
+//切换到lab2_challenge3_multicoremem
+$ git checkout lab2_challenge3_multicoremem
+
+//继承lab2_3以及之前的答案
+$ git merge lab2_3_pagefault -m "continue to work on lab2_challenge3"
+特别注意：本实验需要借助你在lab1_challenge3_multicore中实现的多核启动及运行机制，因此在进行本实验之前，你应该在本实验的基础代码上重做你在lab1_challenge3_multicore中的改动（不要直接使用git merge lab1_challenge3_multicore）。
+
+注意：**不同于基础实验，挑战实验的基础代码具有更大的不完整性，可能无法直接通过构造过程。**同样，不同于基础实验，我们在代码中也并未专门地哪些地方的代码需要填写，哪些地方的代码无须填写。这样，我们留给读者更大的“想象空间”。
+
+在lab1_challenge3中，你已经实现了一个不支持虚拟内存的简单的多核操作系统。现在在lab2中，因为虚拟内存概念的引入，需要你为这个简单操作系统添加额外的多核内存管理。
+如同lab1_challenge3，kernel/config.h中的NCPU规定了操作系统内核支持的核数，在本实验设置为2，即要求你能够正确执行spike -p2 riscv-pke app_alloc0 app_alloc1，每个核分别执行一个进程，进行内存的分配与释放。
+注意，每个进程分配得到的虚拟地址应当是连续的，并且不同核上的进程不应该分配到同一个物理页。
+最终你的输出应当如下所示：
+HTIF is available!
+(Emulated) memory size: 2048 MB
+In m_start, hartid:0
+hartid = 0: Enter supervisor mode...
+PKE kernel start 0x0000000080000000, PKE kernel end: 0x000000008000a000, PKE kernel size: 0x000000000000a000 .
+free physical memory address: [0x000000008000a000, 0x0000000087ffffff] 
+kernel memory manager is initializing ...
+In m_start, hartid:1
+hartid = 1: Enter supervisor mode...
+KERN_BASE 0x0000000080000000
+physical address of _etext is: 0x0000000080006000
+hartid = 0: User application is loading.
+hartid = 1: User application is loading.
+hartid = 0: user frame 0x0000000087fbc000, user stack 0x000000007ffff000, user kstack 0x0000000087fbb000 
+hartid = 0: Application: obj/app_alloc0
+hartid = 1: user frame 0x0000000087fb8000, user stack 0x000000007ffff000, user kstack 0x0000000087fb7000 
+hartid = 1: Application: obj/app_alloc1
+hartid = 0: Application program entry point (virtual address): 0x0000000000010078
+hartid = 1: Application program entry point (virtual address): 0x0000000000010078
+hartid = 0: Switch to user mode...
+hartid = 0: alloc page 0x87fa4000
+hartid = 0: alloc page 0x87fa3000
+hartid = 1: Switch to user mode...
+hartid = 0: vaddr 0x00400000 is mapped to paddr 0x87fa4000
+hartid = 1: alloc page 0x87fa2000
+hartid = 1: alloc page 0x87fa1000
+=== user alloc 0 @ vaddr 0x00400000
+hartid = 1: vaddr 0x00400000 is mapped to paddr 0x87fa2000
+hartid = 0: alloc page 0x87fa0000
+hartid = 0: vaddr 0x00401000 is mapped to paddr 0x87fa0000
+>>> user alloc 1 @ vaddr 0x00400000
+=== user alloc 0 @ vaddr 0x00401000
+hartid = 1: alloc page 0x87f9f000
+hartid = 1: vaddr 0x00401000 is mapped to paddr 0x87f9f000
+hartid = 0: alloc page 0x87f9e000
+hartid = 0: vaddr 0x00402000 is mapped to paddr 0x87f9e000
+>>> user alloc 1 @ vaddr 0x00401000
+=== user alloc 0 @ vaddr 0x00402000
+hartid = 1: alloc page 0x87f9d000
+hartid = 1: vaddr 0x00402000 is mapped to paddr 0x87f9d000
+hartid = 0: alloc page 0x87f9c000
+hartid = 0: vaddr 0x00403000 is mapped to paddr 0x87f9c000
+>>> user alloc 1 @ vaddr 0x00402000
+=== user alloc 0 @ vaddr 0x00403000
+hartid = 1: alloc page 0x87f9b000
+hartid = 1: vaddr 0x00403000 is mapped to paddr 0x87f9b000
+hartid = 0: alloc page 0x87f9a000
+hartid = 0: vaddr 0x00404000 is mapped to paddr 0x87f9a000
+>>> user alloc 1 @ vaddr 0x00403000
+=== user alloc 0 @ vaddr 0x00404000
+hartid = 1: alloc page 0x87f99000
+hartid = 1: vaddr 0x00404000 is mapped to paddr 0x87f99000
+=== user 0: 0
+>>> user alloc 1 @ vaddr 0x00404000
+=== user 0: 1
+>>> user 1: 5
+=== user 0: 2
+>>> user 1: 6
+=== user 0: 3
+>>> user 1: 7
+=== user 0: 4
+>>> user 1: 8
+hartid = 0: User exit with code: 0.
+>>> user 1: 9
+hartid = 1: User exit with code: 0.
+hartid = 0: shutdown with code: 0.
+System is shutting down with exit code 0.
+
+实验指导
+参照lab1_challenge3，在引入进程与内存的概念之后，需要对其内存管理进行并发控制和资源隔离。
+
+在通过s_start进入S mode的时候，pke会对物理内存和内核页表进行初始化。如同lab1_challenge3中spike设备的初始化，这个过程也只应执行一次，并且初始化完毕后所有核才能够开启页表，继续执行之后的指令。
+
+物理地址是所有核共享的，各个核可能会并发的操作物理地址，带来未知的错误。你需要实现一个互斥锁，使得同一时间只有一个核才能分配和释放物理地址。关于互斥锁的实现，你可以选择使用RISC-V原子指令amoswap制作一个简单的自旋锁。
+
+基础代码中在分配物理页处有一行代码sprint，打印用户分配得到的物理页地址。vm_alloc_stage是用来帮助内核判断是否由用户进程在申请内存，其被初始化为0，表示一开始是内核在申请物理内存；并在switch_to被设置为1，表示是用户进程在申请物理内存。但是这个代码目前不支持多核，你需要进行相应修改使其适配多核，并能够正确打印出每个核上用户进程申请的物理页地址。
+
+void *alloc_page(void) {
+  list_node *n = g_free_mem_list.next;
+  uint64 hartid = 0;
+  if (vm_alloc_stage[hartid]) {
+    sprint("hartid = %ld: alloc page 0x%x\n", hartid, n);
+  }
+  if (n) g_free_mem_list.next = n->next;
+  return (void *)n;
+}
+此实验中，你需要利用kernel/sync_utils.h中的同步原语来管理内存，防止同一个物理内存页被两个进程同时占有。如果你没能正确控制物理内存管理的并发，可能会出现：
+
+app_alloc0的输出不依次为0, 1, 2, 3, 4，或者app_alloc1的输出不依次为5, 6, 7, 8, 9
+由于两个进程同时写入同一个物理页，虚拟机触发异常并导致操作系统内核崩溃
+此外，在lab2之前的单进程实验中，虚拟地址是内核的全局变量在管理。然而在正确的实现中，每个进程的虚拟地址空间应该是隔离的。否则，在多进程情况下，每个进程的虚拟地址可能会发生一些重叠或者缺失的情况。你需要实更改单进程情况下的虚拟地址管理，使其能够支持多个进程。如果你的实现不正确，你会看见每个进程通过naive_malloc得到的虚拟内存页不连续。
+
+在实验的基础代码中，有一些打印分配内存地址的代码，你需要将这部分代码改为支持多核执行的版本，然后便可以阅读执行后的输出来判断是否为每个进程分配得到的物理内存页和对应的虚拟内存。
+
+lab3_challenge2 实现信号量
+给定应用
+user/app_semaphore.c
+  1 /*                                                                                                         2 * This app create two child process.
+  3 * Use semaphores to control the order of
+  4 * the main process and two child processes print info. 
+  5 */
+  6 #include "user/user_lib.h"
+  7 #include "util/types.h"
+  8 
+  9 int main(void) {
+ 10     int main_sem, child_sem[2];
+ 11     main_sem = sem_new(1);
+ 12     for (int i = 0; i < 2; i++) child_sem[i] = sem_new(0);
+ 13     int pid = fork();
+ 14     if (pid == 0) {
+ 15         pid = fork();
+ 16         for (int i = 0; i < 10; i++) {
+ 17             sem_P(child_sem[pid == 0]);
+ 18             printu("Child%d print %d\n", pid == 0, i);
+ 19             if (pid != 0) sem_V(child_sem[1]); else sem_V(main_sem);
+ 20         }
+ 21     } else {
+ 22         for (int i = 0; i < 10; i++) {
+ 23             sem_P(main_sem);
+ 24             printu("Parent print %d\n", i);
+ 25             sem_V(child_sem[0]);
+ 26         }
+ 27     }
+ 28     exit(0);
+ 29     return 0;
+ 30 }
+以上程序通过信号量的增减，控制主进程和两个子进程的输出按主进程，第一个子进程，第二个子进程，主进程，第一个子进程，第二个子进程……这样的顺序轮流输出，如上面的应用预期输出如下：
+
+In m_start, hartid:0
+HTIF is available!
+(Emulated) memory size: 2048 MB
+Enter supervisor mode...
+PKE kernel start 0x0000000080000000, PKE kernel end: 0x0000000080009000, PKE kernel size: 0x0000000000009000 .
+free physical memory address: [0x0000000080009000, 0x0000000087ffffff] 
+kernel memory manager is initializing ...
+KERN_BASE 0x0000000080000000
+physical address of _etext is: 0x0000000080005000
+kernel page table is on 
+Switch to user mode...
+in alloc_proc. user frame 0x0000000087fbc000, user stack 0x000000007ffff000, user kstack 0x0000000087fbb000 
+User application is loading.
+Application: obj/app_semaphore
+CODE_SEGMENT added at mapped info offset:3
+DATA_SEGMENT added at mapped info offset:4
+Application program entry point (virtual address): 0x00000000000100b0
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087fae000, user stack 0x000000007ffff000, user kstack 0x0000000087fad000 
+do_fork map code segment at pa:0000000087fb2000 of parent to child at va:0000000000010000.
+going to insert process 1 to ready queue.
+Parent print 0
+going to schedule process 1 to run.
+User call fork.
+will fork a child from parent 1.
+in alloc_proc. user frame 0x0000000087fa2000, user stack 0x000000007ffff000, user kstack 0x0000000087fa1000 
+do_fork map code segment at pa:0000000087fb2000 of parent to child at va:0000000000010000.
+going to insert process 2 to ready queue.
+Child0 print 0
+going to schedule process 2 to run.
+Child1 print 0
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+Parent print 1
+going to insert process 1 to ready queue.
+going to schedule process 1 to run.
+Child0 print 1
+going to insert process 2 to ready queue.
+going to schedule process 2 to run.
+Child1 print 1
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+Parent print 2
+going to insert process 1 to ready queue.
+going to schedule process 1 to run.
+Child0 print 2
+going to insert process 2 to ready queue.
+going to schedule process 2 to run.
+Child1 print 2
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+Parent print 3
+going to insert process 1 to ready queue.
+going to schedule process 1 to run.
+Child0 print 3
+going to insert process 2 to ready queue.
+going to schedule process 2 to run.
+Child1 print 3
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+Parent print 4
+going to insert process 1 to ready queue.
+going to schedule process 1 to run.
+Child0 print 4
+going to insert process 2 to ready queue.
+going to schedule process 2 to run.
+Child1 print 4
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+Parent print 5
+going to insert process 1 to ready queue.
+going to schedule process 1 to run.
+Child0 print 5
+going to insert process 2 to ready queue.
+going to schedule process 2 to run.
+Child1 print 5
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+Parent print 6
+going to insert process 1 to ready queue.
+going to schedule process 1 to run.
+Child0 print 6
+going to insert process 2 to ready queue.
+going to schedule process 2 to run.
+Child1 print 6
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+Parent print 7
+going to insert process 1 to ready queue.
+going to schedule process 1 to run.
+Child0 print 7
+going to insert process 2 to ready queue.
+going to schedule process 2 to run.
+Child1 print 7
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+Parent print 8
+going to insert process 1 to ready queue.
+going to schedule process 1 to run.
+Child0 print 8
+going to insert process 2 to ready queue.
+going to schedule process 2 to run.
+Child1 print 8
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+Parent print 9
+going to insert process 1 to ready queue.
+User exit with code:0.
+going to schedule process 1 to run.
+Child0 print 9
+going to insert process 2 to ready queue.
+User exit with code:0.
+going to schedule process 2 to run.
+Child1 print 9
+User exit with code:0.
+no more ready processes, system shutdown now.
+System is shutting down with exit code 0.
+
+实验内容
+本实验为挑战实验，基础代码将继承和使用lab3_3完成后的代码：
+
+（先提交lab3_3的答案，然后）切换到lab3_challenge2_semaphore、继承lab3_3中所做修改：
+//切换到lab3_challenge2_semaphore
+$ git checkout lab3_challenge2_semaphore
+
+//继承lab3_3以及之前的答案
+$ git merge lab3_3_rrsched -m "continue to work on lab3_challenge1"
+注意：不同于基础实验，挑战实验的基础代码具有更大的不完整性，可能无法直接通过构造过程。 同样，不同于基础实验，我们在代码中也并未专门地哪些地方的代码需要填写，哪些地方的代码无须填写。这样，我们留给读者更大的“想象空间”。
+
+本实验的具体要求为：通过修改PKE内核和系统调用，为用户程序提供信号量功能。
+注意：最终测试程序可能和给出的用户程序不同，但都只涉及信号量的相关操作。
+提示：信号灯的结构不能开太大，否则会导致kernel_size出现问题
+
+实验指导
+你对内核代码的修改可能包含以下内容：
+添加系统调用，使得用户对信号量的操作可以在内核态处理
+在内核中实现信号量的分配、释放和PV操作，当P操作处于等待状态时能够触发进程调度
+注意：完成实验内容后，请读者另外编写应用，对自己的实现进行检测。
+
+另外，后续的基础实验代码并不依赖挑战实验，所以读者可自行决定是否将自己的工作提交到本地代码仓库中（当然，提交到本地仓库是个好习惯，至少能保存自己的“作品”）。
+
+更多指导
+请参考本文档的纸质书。
+
+
+lab3_challenge3 写时复制（Copy On Write）
+给定应用
+user/app_cow.c
+/*
+ * This app fork a child process to read and write the heap data from parent process.
+ * Because implemented copy on write, when child process only read the heap data,
+ * the physical address is the same as the parent process.
+ * But after writing, child process heap will have different physical address.              
+ */
+
+#include "user/user_lib.h"
+#include "util/types.h"
+
+int main(void) {
+  int *heap_data = naive_malloc();
+  printu("the physical address of parent process heap is: ");
+  printpa(heap_data);
+  int pid = fork();
+  if (pid == 0) {
+    printu("the physical address of child process heap before copy on write is: ");
+    printpa(heap_data);
+    heap_data[0] = 0;
+    printu("the physical address of child process heap after copy on write is: ");
+    printpa(heap_data);
+  }
+  exit(0);
+  return 0;
+}
+该应用执行如下操作：
+
+在父进程的堆上申请一片区域，并输出其物理地址。
+进行fork操作，输出子进程在对堆数据写入前后对应的物理地址。
+
+实验内容
+本实验为挑战实验，基础代码将继承和使用lab3_3完成后的代码：
+
+先提交lab3_3的答案，然后）切换到lab3_challenge3_cow、继承lab3_3（注意，不是继承lab3_challenge1_wait和lab3_challenge2_semaphore！PKE的挑战实验之间无继承关联）中所做修改，并make后的直接运行结果：
+//切换到lab3_challenge3_cow
+$ git checkout lab3_challenge3_cow
+
+//继承lab3_3以及之前的答案
+$ git merge lab3_3_rrsched -m "continue to work on lab3_challenge3"
+
+$ spike obj/riscv-pke obj/app_cow
+In m_start, hartid:0
+HTIF is available!
+(Emulated) memory size: 2048 MB
+Enter supervisor mode...
+PKE kernel start 0x0000000080000000, PKE kernel end: 0x000000008000b000, PKE kernel size: 0x000000000000b000 .
+free physical memory address: [0x000000008000b000, 0x0000000087ffffff] 
+kernel memory manager is initializing ...
+KERN_BASE 0x0000000080000000
+physical address of _etext is: 0x0000000080005000
+kernel page table is on 
+Switch to user mode...
+in alloc_proc. user frame 0x0000000087fbc000, user stack 0x000000007ffff000, user kstack 0x0000000087fbb000 
+User application is loading.
+Application: obj/app_two_long_loops
+CODE_SEGMENT added at mapped info offset:4
+Application program entry point (virtual address): 0x0000000000010078
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+the physical address of parent process heap is: 0000000087faf000
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087fad000, user stack 0x000000007ffff000, user kstack 0x0000000087fac000 
+do_fork map code segment at pa:0000000087fb2000 of parent to child at va:0000000000010000.
+going to insert process 1 to ready queue.
+User exit with code:0.
+going to schedule process 1 to run.
+the physical address of child process heap before copy on write is: 0000000087fa3000
+the physical address of child process heap after copy on write is: 0000000087fa3000
+User exit with code:0.
+no more ready processes, system shutdown now.
+System is shutting down with exit code 0.
+可以看到，在fork之后，子进程的堆数据无论是否进行写入，其物理地址与父进程均不同。这是因为我们fork时直接为子进程分配了新的物理页面导致的。在实现了写时复制的fork中，是不会直接给子进程申请新的物理页面，而是当子进程执行写入操作时，才通过异常机制来分配新的物理页面，也就是说，子进程的堆数据物理地址在未执行写入前，和父进程应该是一样的。
+
+注意：不同于基础实验，挑战实验的基础代码具有更大的不完整性，可能无法直接通过构造过程。 同样，不同于基础实验，我们在代码中也并未专门地哪些地方的代码需要填写，哪些地方的代码无须填写。这样，我们留给读者更大的“想象空间”。
+
+本实验要求你通过修改内核代码，使得在fork时不直接为新的堆空间分配内存，而是等写入之后才分配，即实现fork的写时复制(COW)机制。
+你的程序输出应该如下：
+$ spike obj/riscv-pke obj/app_cow
+In m_start, hartid:0
+HTIF is available!
+(Emulated) memory size: 2048 MB
+Enter supervisor mode...
+PKE kernel start 0x0000000080000000, PKE kernel end: 0x000000008004b000, PKE kernel size: 0x000000000004b000 .
+free physical memory address: [0x000000008004b000, 0x0000000087ffffff] 
+kernel memory manager is initializing ...
+KERN_BASE 0x0000000080000000
+physical address of _etext is: 0x0000000080005000
+kernel page table is on 
+Switch to user mode...
+in alloc_proc. user frame 0x0000000087fbc000, user stack 0x000000007ffff000, user kstack 0x0000000087fbb000 
+User application is loading.
+Application: obj/app_cow
+CODE_SEGMENT added at mapped info offset:4
+Application program entry point (virtual address): 0x0000000000010078
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+the physical address of parent process heap is: 0000000087faf000
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087fad000, user stack 0x000000007ffff000, user kstack 0x0000000087fac000 
+do_fork map code segment at pa:0000000087fb2000 of parent to child at va:0000000000010000.
+going to insert process 1 to ready queue.
+User exit with code:0.
+going to schedule process 1 to run.
+the physical address of child process heap before copy on write is: 0000000087faf000
+handle_page_fault: 0000000000400000
+the physical address of child process heap after copy on write is: 0000000087fa0000
+User exit with code:0.
+no more ready processes, system shutdown now.
+System is shutting down with exit code 0.
+可以看到，输出里多出了处理异常和cow验证输出的语句。
+
+
+实验指导
+写时复制是一种非常常见的优化手段。在Shell中，我们经常fork完一个进程之后会立即调用exec来将子进程替换为新的进程。如果我们在fork时将父进程的所有地址空间全部复制给子进程，而子进程在exec后做的第一件事情是丢弃这个地址空间，也就是我们做了一些无用的复制操作，产生了额外的开销。所以我们可以用“先映射但不实际复制”的方式来优化上述提到的开销，只有子进程真正需要写入映射到父进程的地址空间时，我们才真正的执行“申请空间-复制”这一操作，这就是写时复制（Copy on Write，COW）技术。
+
+为完成该挑战，你需要对pke中进程空间有更详细的了解，判断哪些地址范围可能会被访问。
+你可以参考Linux或其他主流操作系统中写时复制机制的实现。
+你对内核代码的修改可能包含以下内容：
+在堆段的复制发生时，实现”先映射但不实际复制“。
+对页表项的标志位进行修改。当子进程拥有映射到父进程的地址的页表项时，页表项应该具有哪些权限？当COW发生后，页表项又该具有哪些权限？
+内核如何分辨现在是一个copy-on-write fork的场景？提示：PTE的标志位中有两位RSW是没有使用的。
+如果有父进程fork了多个子进程，意味着该父进程的物理页会被多个子进程”共享“。举个例子，当父进程退出时我们需要更加的小心，因为我们要判断是否能立即释放相应的物理页。如果有子进程还在使用这些物理页，而内核又释放了这些物理页，将会出现问题。该“共享”页在什么条件下才能释放？
+注意：本挑战的难点在于对页表项的控制以及对页面释放的判断，读者应思考两个问题如何解决，完成设计并验证后，读者可以继续尝试在数据段也加入写时复制机制。
+
+
+
+lab4_challenge2 重载执行
+给定应用
+user/app_exec.c
+
+01 #include "user_lib.h"
+02 #include "util/types.h"
+03 
+04 int main(int argc, char *argv[]) {
+05   printu("\n======== exec /bin/app_ls in app_exec ========\n");
+06   int ret = exec("/bin/app_ls");
+07   if (ret == -1)
+08     printu("exec failed!\n");
+09 
+10   exit(0);
+11   return 0;
+12 }
+user/app_ls.c
+
+01 #include "user_lib.h"
+02 #include "util/string.h"
+03 #include "util/types.h"
+04 
+05 int main(int argc, char *argv[]) {
+06   char path[] = "/RAMDISK0";
+07   int dir_fd = opendir_u(path);
+08   printu("------------------------------\n");
+09   printu("ls \"%s\":\n", path);
+10   printu("[name]               [inode_num]\n");
+11   struct dir dir;
+12   int width = 20;
+13   while(readdir_u(dir_fd, &dir) == 0) {
+14     // we do not have %ms :(
+15     char name[width + 1];
+16     memset(name, ' ', width + 1);
+17     name[width] = '\0';
+18     if (strlen(dir.name) < width) {
+19       strcpy(name, dir.name);
+20       name[strlen(dir.name)] = ' ';
+21       printu("%s %d\n", name, dir.inum);
+22     }
+23     else
+24       printu("%s %d\n", dir.name, dir.inum);
+25   }
+26   printu("------------------------------\n");
+27   closedir_u(dir_fd);
+28 
+29   exit(0);
+30   return 0;
+31 }
+以上给出了app_exec和app_ls两个程序。其中app_exec作为主程序，会在PKE启动后被运行。user/app_ls.c被编译成可执行文件app_ls，保存在./hostfs_root/bin/目录（挂载为/bin）下。在app_exec执行过程中会调用exec系统调用执行/bin目录下的app_ls程序。
+
+exec函数用来在一个进程中启动另一个程序执行。其中可执行文件通过文件的路径名指定，从文件系统中读出。exec会根据读入的可执行文件将原进程的数据段、代码段和堆栈段替换。
+
+如上的应用预期输出如下：
+
+In m_start, hartid:0
+HTIF is available!
+(Emulated) memory size: 2048 MB
+Enter supervisor mode...
+PKE kernel start 0x0000000080000000, PKE kernel end: 0x000000008000d000, PKE kernel size: 0x000000000000d000 .
+free physical memory address: [0x000000008000d000, 0x0000000087ffffff] 
+kernel memory manager is initializing ...
+KERN_BASE 0x0000000080000000
+physical address of _etext is: 0x0000000080008000
+kernel page table is on 
+RAMDISK0: base address of RAMDISK0 is: 0x0000000087f35000
+RFS: format RAMDISK0 done!
+Switch to user mode...
+in alloc_proc. user frame 0x0000000087f29000, user stack 0x000000007ffff000, user kstack 0x0000000087f28000 
+FS: created a file management struct for a process.
+in alloc_proc. build proc_file_management successfully.
+User application is loading.
+Application: /bin/app_exec
+CODE_SEGMENT added at mapped info offset:3
+Application program entry point (virtual address): 0x0000000000010078
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+
+======== exec /bin/app_ls in app_exec ========
+Application: /bin/app_ls
+CODE_SEGMENT added at mapped info offset:3
+DATA_SEGMENT added at mapped info offset:4
+Application program entry point (virtual address): 0x00000000000100b0
+------------------------------
+ls "/RAMDISK0":
+[name]               [inode_num]
+------------------------------
+User exit with code:0.
+no more ready processes, system shutdown now.
+System is shutting down with exit code 0.
+根据结果可以看出，app_exec程序成功读取并运行了保存在hostfs上的app_ls程序。
+
+
+实验内容
+本实验为挑战实验，基础代码将继承和使用lab4_3完成后的代码：
+
+（先提交lab4_3的答案，然后）切换到lab4_challenge2_exec、继承lab4_3中所做修改：
+
+//切换到lab4_challenge2_exec
+$ git checkout lab4_challenge2_exec
+
+//继承lab4_3以及之前的答案
+$ git merge lab4_3_hardlink -m "continue to work on lab4_challenge2"
+
+//在完成代码修改后进行编译
+$ make clean; make
+
+//运行程序（根据实现方式的不同，运行命令可能有以下两种）
+//1. 修改了PKE基础代码中加载主程序ELF文件的方式，改为通过VFS文件系统读取：
+$ spike ./obj/riscv-pke /bin/app_exec
+
+//2. 未对PKE基础代码中加载主程序ELF文件的方式进行修改：
+$ spike ./obj/riscv-pke ./obj/app_exec
+注意：**不同于基础实验，挑战实验的基础代码具有更大的不完整性，可能无法直接通过构造过程。**同样，不同于基础实验，我们在代码中也并未专门地哪些地方的代码需要填写，哪些地方的代码无须填写。这样，我们留给读者更大的“想象空间”。
+
+本实验的具体要求为：
+
+通过修改PKE内核和系统调用，为用户程序提供exec函数的功能。exec接受一个可执行程序的路径名作为参数，表示要重新载入的elf文件。exec函数在执行成功时不会返回，执行失败时返回-1。
+
+实验指导
+你对内核代码的修改可能包含添加系统调用、在内核中实现exec函数的功能。
+注意：完成实验内容后，若读者同时完成了之前的“lab3_challenge1 进程等待和数据段复制”挑战实验，则可以自行对app_exec程序进行修改，将其改为一个简单的“shell”程序。该“shell”程序应该首先通过fork系统调用创建一个新的子进程，并在子进程中调用exec执行一个新的程序（如app_ls），同时父进程会调用wait系统调用等待子进程的结束，并继续执行后续代码。
+
+
+ lab4_challenge3 简易Shell
+给定应用
+user/app_shell.c
+/*
+ * This app starts a very simple shell and executes some simple commands.
+ * The commands are stored in the hostfs_root/shellrc
+ * The shell loads the file and executes the command line by line.                 
+ */
+#include "user_lib.h"
+#include "string.h"
+#include "util/types.h"
+
+int main(int argc, char *argv[]) {
+  printu("\n======== Shell Start ========\n\n");
+  int fd;
+  int MAXBUF = 1024;
+  char buf[MAXBUF];
+  char *token;
+  char delim[3] = " \n";
+  fd = open("/shellrc", O_RDONLY);
+
+  read_u(fd, buf, MAXBUF);
+  close(fd);
+  char *command = naive_malloc();
+  char *para = naive_malloc();
+  int start = 0;
+  while (1)
+  {
+    if(!start) {
+      token = strtok(buf, delim);
+      start = 1;
+    }
+    else 
+      token = strtok(NULL, delim);
+    strcpy(command, token);
+    token = strtok(NULL, delim);
+    strcpy(para, token);
+    if(strcmp(command, "END") == 0 && strcmp(para, "END") == 0)
+      break;
+    printu("Next command: %s %s\n\n", command, para);
+    printu("==========Command Start============\n\n");
+    int pid = fork();
+    if(pid == 0) {
+      int ret = exec(command, para);
+      if (ret == -1)
+      printu("exec failed!\n");
+    }
+    else
+    {
+      wait(pid);
+      printu("==========Command End============\n\n");
+    }
+  }
+  exit(0);
+  return 0;
+}
+
+该应用程序从位于hostfs_root下的shellrc文件中读取若干条命令，对于每条命令，我们都会fork一个新的进程，并exec对应的程序来完成命令。exec将用第一个参数对应的程序来替换fork出来的新进程，并将第二个参数的内容传入新的进程。
+
+给出的shellrc文件如下：
+
+/bin/app_mkdir /RAMDISK0/sub_dir
+/bin/app_touch /RAMDISK0/sub_dir/ramfile1
+/bin/app_touch /RAMDISK0/sub_dir/ramfile2
+/bin/app_echo /RAMDISK0/sub_dir/ramfile1
+/bin/app_cat /RAMDISK0/sub_dir/ramfile1
+/bin/app_ls /RAMDISK0/sub_dir
+/bin/app_ls /RAMDISK0
+END END
+
+可以看到，我们提供了五种简化版的命令，分别是ls，mkdir，touch，echo，cat。命令的对应功能参考Linux下的命令。（echo命令的内容有所不同，为了简单起见，提供的echo命令功能为：向指定的文件写入hello world。比如shellrc中的echo命令实际上是向/RAMDISK0/sub_dir/ramfile1文件中写入了hello world）
+
+同样是为了简单起见，我们规定在遇到两个END时结束程序。
+
+shellrc中的其余命令实现均位于user目录下，这里不一一列出，请感兴趣的读者自行查看。
+
+shell程序将会依次执行上述命令，如果你完成了本实验，你应当看到的输出如下：
+
+$ spike obj/riscv-pke /bin/app_shell
+In m_start, hartid:0
+HTIF is available!
+(Emulated) memory size: 2048 MB
+Enter supervisor mode...
+PKE kernel start 0x0000000080000000, PKE kernel end: 0x0000000080011000, PKE kernel size: 0x0000000000011000 .
+free physical memory address: [0x0000000080011000, 0x0000000087ffffff] 
+kernel memory manager is initializing ...
+KERN_BASE 0x0000000080000000
+physical address of _etext is: 0x0000000080009000
+kernel page table is on 
+RAMDISK0: base address of RAMDISK0 is: 0x0000000087f35000
+RFS: format RAMDISK0 done!
+Switch to user mode...
+in alloc_proc. user frame 0x0000000087f29000, user stack 0x000000007ffff000, user kstack 0x0000000087f28000 
+FS: created a file management struct for a process.
+in alloc_proc. build proc_file_management successfully.
+User application is loading.
+Application: /bin/app_shell
+CODE_SEGMENT added at mapped info offset:4
+DATA_SEGMENT added at mapped info offset:5
+Application program entry point (virtual address): 0x00000000000100b0
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+
+======== Shell Start ========
+
+Next command: /bin/app_mkdir /RAMDISK0/sub_dir
+
+==========Command Start============
+
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087f0e000, user stack 0x000000007ffff000, user kstack 0x0000000087f0c000 
+FS: created a file management struct for a process.
+in alloc_proc. build proc_file_management successfully.
+do_fork map code segment at pa:0000000087f13000 of parent to child at va:0000000000010000.
+going to insert process 1 to ready queue.
+going to schedule process 1 to run.
+Application: /bin/app_mkdir
+CODE_SEGMENT added at mapped info offset:4
+Application program entry point (virtual address): 0x0000000000010078
+
+======== mkdir command ========
+mkdir: /RAMDISK0/sub_dir
+User exit with code:0.
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+==========Command End============
+
+Next command: /bin/app_touch /RAMDISK0/sub_dir/ramfile1
+
+==========Command Start============
+
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087ef3000, user stack 0x000000007ffff000, user kstack 0x0000000087ef2000 
+FS: created a file management struct for a process.
+in alloc_proc. build proc_file_management successfully.
+do_fork map code segment at pa:0000000087f13000 of parent to child at va:0000000000010000.
+going to insert process 2 to ready queue.
+going to schedule process 2 to run.
+Application: /bin/app_touch
+CODE_SEGMENT added at mapped info offset:4
+Application program entry point (virtual address): 0x0000000000010078
+
+======== touch command ========
+touch: /RAMDISK0/sub_dir/ramfile1
+file descriptor fd: 0
+User exit with code:0.
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+==========Command End============
+
+Next command: /bin/app_touch /RAMDISK0/sub_dir/ramfile2
+
+==========Command Start============
+
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087ee8000, user stack 0x000000007ffff000, user kstack 0x0000000087ee6000 
+FS: created a file management struct for a process.
+in alloc_proc. build proc_file_management successfully.
+do_fork map code segment at pa:0000000087f13000 of parent to child at va:0000000000010000.
+going to insert process 3 to ready queue.
+going to schedule process 3 to run.
+Application: /bin/app_touch
+CODE_SEGMENT added at mapped info offset:4
+Application program entry point (virtual address): 0x0000000000010078
+
+======== touch command ========
+touch: /RAMDISK0/sub_dir/ramfile2
+file descriptor fd: 0
+User exit with code:0.
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+==========Command End============
+
+Next command: /bin/app_echo /RAMDISK0/sub_dir/ramfile1
+
+==========Command Start============
+
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087ed1000, user stack 0x000000007ffff000, user kstack 0x0000000087ecf000 
+FS: created a file management struct for a process.
+in alloc_proc. build proc_file_management successfully.
+do_fork map code segment at pa:0000000087f13000 of parent to child at va:0000000000010000.
+going to insert process 4 to ready queue.
+going to schedule process 4 to run.
+Application: /bin/app_echo
+CODE_SEGMENT added at mapped info offset:4
+DATA_SEGMENT added at mapped info offset:5
+Application program entry point (virtual address): 0x00000000000100b0
+
+======== echo command ========
+echo: /RAMDISK0/sub_dir/ramfile1
+file descriptor fd: 0
+write content: 
+hello world
+User exit with code:0.
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+==========Command End============
+
+Next command: /bin/app_cat /RAMDISK0/sub_dir/ramfile1
+
+==========Command Start============
+
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087eba000, user stack 0x000000007ffff000, user kstack 0x0000000087eb8000 
+FS: created a file management struct for a process.
+in alloc_proc. build proc_file_management successfully.
+do_fork map code segment at pa:0000000087f13000 of parent to child at va:0000000000010000.
+going to insert process 5 to ready queue.
+going to schedule process 5 to run.
+Application: /bin/app_cat
+CODE_SEGMENT added at mapped info offset:4
+Application program entry point (virtual address): 0x0000000000010078
+
+======== cat command ========
+cat: /RAMDISK0/sub_dir/ramfile1
+file descriptor fd: 0
+read content: 
+hello world
+User exit with code:0.
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+==========Command End============
+
+Next command: /bin/app_ls /RAMDISK0/sub_dir
+
+==========Command Start============
+
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087ea2000, user stack 0x000000007ffff000, user kstack 0x0000000087ea0000 
+FS: created a file management struct for a process.
+in alloc_proc. build proc_file_management successfully.
+do_fork map code segment at pa:0000000087f13000 of parent to child at va:0000000000010000.
+going to insert process 6 to ready queue.
+going to schedule process 6 to run.
+Application: /bin/app_ls
+CODE_SEGMENT added at mapped info offset:4
+DATA_SEGMENT added at mapped info offset:5
+Application program entry point (virtual address): 0x00000000000100b0
+---------- ls command -----------
+ls "/RAMDISK0/sub_dir":
+[name]               [inode_num]
+ramfile1             2
+ramfile2             3
+------------------------------
+User exit with code:0.
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+==========Command End============
+
+Next command: /bin/app_ls /RAMDISK0
+
+==========Command Start============
+
+User call fork.
+will fork a child from parent 0.
+in alloc_proc. user frame 0x0000000087e8b000, user stack 0x000000007ffff000, user kstack 0x0000000087f14000 
+FS: created a file management struct for a process.
+in alloc_proc. build proc_file_management successfully.
+do_fork map code segment at pa:0000000087f13000 of parent to child at va:0000000000010000.
+going to insert process 7 to ready queue.
+going to schedule process 7 to run.
+Application: /bin/app_ls
+CODE_SEGMENT added at mapped info offset:4
+DATA_SEGMENT added at mapped info offset:5
+Application program entry point (virtual address): 0x00000000000100b0
+---------- ls command -----------
+ls "/RAMDISK0":
+[name]               [inode_num]
+sub_dir              1
+------------------------------
+User exit with code:0.
+going to insert process 0 to ready queue.
+going to schedule process 0 to run.
+==========Command End============
+
+User exit with code:0.
+no more ready processes, system shutdown now.
+System is shutting down with exit code 0.
+
+实验内容
+本实验为挑战实验，基础代码将继承和使用lab4_3_hardlink完成后的代码：
+
+先提交lab4_3_hardlink的答案，然后）切换到lab4_challenge3_shell、继承lab4_3_hardlink中所做修改：
+//切换到lab4_challenge3_shell
+$ git checkout lab4_challenge3_shell
+
+//继承lab4_3_hardlink以及之前的答案
+$ git merge lab4_3_hardlink -m "continue to work on lab4_challenge3"
+注意：不同于基础实验，挑战实验的基础代码具有更大的不完整性，可能无法直接通过构造过程。 同样，不同于基础实验，我们在代码中也并未专门地哪些地方的代码需要填写，哪些地方的代码无须填写。这样，我们留给读者更大的“想象空间”。
+
+本实验的具体要求为：
+
+通过修改PKE内核和系统调用，为用户程序提供exec函数的功能。exec接受一个可执行程序的路径名，以及一个字符串作为参数。（实际上，exec系统调用的第二个参数本应是一个参数数组，即char** 类型，这里为简单起见仅需传入一个参数即可。如果读者学有余力，可以自行实现多个参数传入版本的exec）
+此外，为了保证shell的正规性，你需要额外实现wait功能，来保证程序的执行顺序。如果你已经完成了lab3_challenge1，那么可以直接使用对应成果。
+
+实验指导
+shell是Linux中的一个重要概念，主要用于和用户的交互。其基本流程为：用户输入命令->shell创建一个新进程，并使用exec函数加载命令对应的程序->将结果通过shell返回用户。其中，fork函数的功能已在前面的实验中实现，本实验主要实现exec函数的功能。（如果你已完成lab4_challenge2的话，对本实验会非常有帮助）
+
+不考虑参数传递问题的话，exec要做的工作基本为替换elf内容和重置堆栈等地址空间。但是因为存在新进程需要得知命令参数的问题，exec除了提到的工作之外，还需要考虑以下问题：
+
+main函数中的argc，argv数组的含义，以及main函数是从哪里得到它们的。（提示：main函数也是函数，函数的参数一般保存在哪里呢）
+在lab1中我们初步了解了系统调用，可以发现，系统调用使用了a0~a7寄存器。请读者思考：处理系统调用的函数的返回值保存在哪里，有什么作用呢？
+在exec替换完elf后，我们将堆栈重置。此时的sp指向什么位置，是否可以修改以达到传递参数的效果。
+注意地址对齐。读者可自行参阅RISC-V的相关资料，了解该指令集下的地址对齐规则。
+注意：完成实验内容后，若读者同时完成了之前的“lab3_challenge3 写时复制”挑战实验，则可以将fork添加写时复制功能来减少不必要的开销。此外，本挑战实验具有很强的扩展性，读者可通过自行比对与真实shell的差别，为pke-shell添加更完善的功能。
